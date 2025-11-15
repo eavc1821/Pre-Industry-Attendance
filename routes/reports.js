@@ -33,7 +33,7 @@ router.get('/daily', authenticateToken, async (req, res) => {
         END as status
       FROM employees e
       LEFT JOIN attendance a ON e.id = a.employee_id AND a.date = ?
-      WHERE e.is_active = 1
+      WHERE e.is_active = true
       ORDER BY e.type, e.name
       `,
       [reportDate]
@@ -84,7 +84,7 @@ router.get('/weekly', authenticateToken, async (req, res) => {
       FROM employees e
       INNER JOIN attendance a ON e.id = a.employee_id 
       WHERE e.type = 'Producción' 
-        AND e.is_active = 1
+        AND e.is_active = true
         AND a.date BETWEEN ? AND ?
         AND a.exit_time IS NOT NULL
       GROUP BY e.id
@@ -104,7 +104,7 @@ router.get('/weekly', authenticateToken, async (req, res) => {
       FROM employees e
       INNER JOIN attendance a ON e.id = a.employee_id 
       WHERE e.type = 'Al Dia' 
-        AND e.is_active = 1
+        AND e.is_active = true
         AND a.date BETWEEN ? AND ?
         AND a.exit_time IS NOT NULL
       GROUP BY e.id

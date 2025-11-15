@@ -18,7 +18,7 @@ router.get('/stats', authenticateToken, async (req, res) => {
       recentActivity
     ] = await Promise.all([
       // Total de empleados activos
-      getQuery('SELECT COUNT(*) as count FROM employees WHERE is_active = 1'),
+      getQuery('SELECT COUNT(*) as count FROM employees WHERE is_active = true'),
       
       // Asistencia de hoy
       getQuery('SELECT COUNT(*) as count FROM attendance WHERE date = ?', [today]),

@@ -31,7 +31,7 @@ router.post('/login', async (req, res) => {
     }
 
     const user = await getQuery(
-      'SELECT * FROM users WHERE username = ? AND is_active = 1',
+      'SELECT * FROM users WHERE username = ? AND is_active = true',
       [username]
     );
 
@@ -100,7 +100,7 @@ router.post('/verify', async (req, res) => {
 
     // Verificar que el usuario existe
     const user = await getQuery(
-      'SELECT id, username, role FROM users WHERE id = ? AND is_active = 1',
+      'SELECT id, username, role FROM users WHERE id = ? AND is_active = true',
       [decoded.id]
     );
 
@@ -149,7 +149,7 @@ router.put('/update-profile', authenticateToken, async (req, res) => {
 
     // Obtener usuario
     const user = await getQuery(
-      'SELECT * FROM users WHERE id = ? AND is_active = 1',
+      'SELECT * FROM users WHERE id = ? AND is_active = true',
       [userId]
     );
 
@@ -162,7 +162,7 @@ router.put('/update-profile', authenticateToken, async (req, res) => {
 
     // Verificar duplicado
     const duplicateUser = await getQuery(
-      'SELECT id FROM users WHERE username = ? AND id != ? AND is_active = 1',
+      'SELECT id FROM users WHERE username = ? AND id != ? AND is_active = true',
       [username, userId]
     );
 

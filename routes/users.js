@@ -22,7 +22,7 @@ router.get('/', authenticateToken, requireSuperAdmin, async (req, res) => {
         created_at,
         updated_at
       FROM users 
-      WHERE is_active = 1
+      WHERE is_active = true
       ORDER BY created_at DESC
     `);
 
@@ -48,7 +48,7 @@ router.get('/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const user = await getQuery(
       `SELECT id, username, role, created_at, updated_at 
-       FROM users WHERE id = ? AND is_active = 1`,
+       FROM users WHERE id = ? AND is_active = true`,
       [req.params.id]
     );
 
@@ -111,7 +111,7 @@ router.post('/', authenticateToken, requireSuperAdmin, async (req, res) => {
 
     // Verificar duplicados
     const existingUser = await getQuery(
-      'SELECT id FROM users WHERE username = ? AND is_active = 1',
+      'SELECT id FROM users WHERE username = ? AND is_active = true',
       [username]
     );
 
@@ -160,7 +160,7 @@ router.put('/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
 
     // Validar existencia
     const existingUser = await getQuery(
-      'SELECT id, role FROM users WHERE id = ? AND is_active = 1',
+      'SELECT id, role FROM users WHERE id = ? AND is_active = true',
       [userId]
     );
 
@@ -202,7 +202,7 @@ router.put('/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
 
     // Verificar duplicado de username
     const duplicate = await getQuery(
-      'SELECT id FROM users WHERE username = ? AND id != ? AND is_active = 1',
+      'SELECT id FROM users WHERE username = ? AND id != ? AND is_active = true',
       [username, userId]
     );
 
@@ -262,7 +262,7 @@ router.delete('/:id', authenticateToken, requireSuperAdmin, async (req, res) => 
     const userId = req.params.id;
 
     const existingUser = await getQuery(
-      'SELECT id, role FROM users WHERE id = ? AND is_active = 1',
+      'SELECT id, role FROM users WHERE id = ? AND is_active = true',
       [userId]
     );
 
@@ -281,7 +281,7 @@ router.delete('/:id', authenticateToken, requireSuperAdmin, async (req, res) => 
     }
 
     await runQuery(
-      'UPDATE users SET is_active = 0, updated_at = NOW() WHERE id = ?',
+      'UPDATE users SET is_active = false, updated_at = NOW() WHERE id = ?',
       [userId]
     );
 

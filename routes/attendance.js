@@ -31,7 +31,7 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
 
     // Verificar si el empleado existe
     const employee = await getQuery(
-      'SELECT id, name, type FROM employees WHERE id = ? AND is_active = 1',
+      'SELECT id, name, type FROM employees WHERE id = ? AND is_active = true',
       [employee_id]
     );
 
