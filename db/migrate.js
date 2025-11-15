@@ -1,22 +1,27 @@
 const fs = require('fs');
 const path = require('path');
-const { pool } = require('../config/database');
+const { pool } = require('../database'); 
 
 async function runMigration() {
   try {
     console.log("🚀 Ejecutando migración PostgreSQL...");
 
-    const schemaPath = path.join(__dirname, 'schema.sql');
+    const schemaPath = path.join(__dirname, '../schema.sql');
     const schemaSQL = fs.readFileSync(schemaPath, 'utf8');
 
     await pool.query(schemaSQL);
 
     console.log("✅ Migración completada");
-    process.exit(0);
   } catch (err) {
     console.error("❌ Error ejecutando migración:", err);
-    process.exit(1);
+  } finally {
+    process.exit(0);
   }
 }
 
-runMigration();
+// Ejecutar solo si se llama desde terminal
+if (require.main === module) {
+  runMigration();
+}
+
+module.exports = runMigration;

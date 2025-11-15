@@ -9,7 +9,7 @@ const helmet = require('helmet');
 const path = require('path');
 
 // Importar migración y rutas
-const runMigration = require('./db/migrate');
+// const runMigration = require('./db/migrate');
 const authRoutes = require('./routes/auth');
 const employeeRoutes = require('./routes/employees');
 const userRoutes = require('./routes/users');
@@ -29,8 +29,8 @@ app.use(helmet());
 app.use(cors({
   origin: [
     'http://localhost:5173',               // desarrollo
-    'https://tudominio.com',               // SiteGround
-    'https://www.tudominio.com'
+    'https://gjd78.com',               // SiteGround
+    'https://www.gjd78.com'
   ],
   credentials: true
 }));
@@ -49,7 +49,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 (async () => {
   try {
     console.log("🔄 Ejecutando migración (si es necesaria)...");
-    await runMigration(); // solo crea tablas si no existen
+    // await runMigration(); // solo crea tablas si no existen
     console.log("✅ Migración completada");
 
     // ===============================================================
