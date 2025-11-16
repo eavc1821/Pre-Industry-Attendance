@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
-const { pool } = require('../database'); 
+const { pool } = require('../config/database');
+
 
 async function runMigration() {
   try {
