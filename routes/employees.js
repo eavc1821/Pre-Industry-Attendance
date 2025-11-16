@@ -1,11 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const qr = require("qr-image");
-const axios = require("axios");
 const { runQuery, getQuery } = require("../db");
 const { authenticateToken, requireAdminOrScanner } = require("../middleware/auth");
 const cloudinary = require("../cloudinary");
-const upload = require("../middleware/multer");
+const upload = require("../config/multerCloudinary");
 
 // ==================================================
 // GET ALL EMPLOYEES
@@ -58,24 +57,10 @@ router.post("/", authenticateToken, requireAdminOrScanner, upload.single("photo"
     // FOTO OPCIONAL
     let photoUrl = null;
 
-    if (req.file && req.file.buffer && req.file.size > 0) {
-      try {
-        const uploadPhoto = () =>
-          new Promise((resolve, reject) => {
-            const stream = cloudinary.uploader.upload_stream(
-              { folder: "attendance-photos" },
-              (err, result) => (err ? reject(err) : resolve(result))
-            );
-            stream.end(req.file.buffer);
-          });
-
-        const uploadedPhoto = await uploadPhoto();
-        photoUrl = uploadedPhoto.secure_url;
-
-      } catch (err) {
-        console.error("⚠️ Error subiendo foto:", err);
+    // CloudinaryStorage guarda la foto automáticamente
+      if (req.file) {
+        photoUrl = req.file.path;  
       }
-    }
 
     // INSERTAR EMPLEADO
     const created = await runQuery(
