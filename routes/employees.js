@@ -1,16 +1,16 @@
-const express = require('express');
-const qr = require('qr-image');
-const { getQuery, allQuery, runQuery } = require('../config/database');
-const { authenticateToken, requireAdminOrScanner } = require('../middleware/auth');
-const upload = require('../config/multerCloudinary');
-const cloudinary = require('../config/cloudinary');
-
+const express = require("express");
 const router = express.Router();
+const qr = require("qr-image");
+const axios = require("axios");
+const { runQuery, getQuery } = require("../db");
+const { authenticateToken, requireAdminOrScanner } = require("../middleware/auth");
+const cloudinary = require("../cloudinary");
+const upload = require("../middleware/multer");
 
-/* ================================================================
-   GET /api/employees - Listar empleados activos
-================================================================ */
-router.get('/', authenticateToken, async (req, res) => {
+// ==================================================
+// GET ALL EMPLOYEES
+// ==================================================
+router.get("/", authenticateToken, async (req, res) => {
   try {
     const employees = await runQuery(`
       SELECT 
@@ -27,53 +27,54 @@ router.get('/', authenticateToken, async (req, res) => {
       ORDER BY id DESC
     `);
 
-    res.json({
-      success: true,
-      data: employees
-    });
-
+    res.json({ success: true, data: employees });
   } catch (error) {
     console.error("❌ Error obteniendo empleados:", error);
     res.status(500).json({ success: false, error: "Error obteniendo empleados" });
   }
 });
 
-
-/* ================================================================
-   POST /api/employees - Crear empleado + QR automático
-================================================================ */
-router.post('/', authenticateToken, requireAdminOrScanner, upload.single('photo'), async (req, res) => {
+// ==================================================
+// CREATE EMPLOYEE + AUTO QR
+// ==================================================
+router.post("/", authenticateToken, requireAdminOrScanner, upload.single("photo"), async (req, res) => {
   try {
     const { dni, name, type, monthly_salary } = req.body;
 
     // VALIDACIONES
     if (!dni || dni.length !== 13) {
-      return res.status(400).json({ success: false, error: 'DNI inválido (13 dígitos)' });
+      return res.status(400).json({ success: false, error: "DNI inválido (13 dígitos)" });
     }
 
-    const existing = await getQuery(
-      'SELECT id FROM employees WHERE dni = $1 AND is_active = TRUE',
+    const exists = await getQuery(
+      "SELECT id FROM employees WHERE dni = $1 AND is_active = TRUE",
       [dni]
     );
 
-    if (existing) {
-      return res.status(400).json({ success: false, error: 'Ya existe un empleado con este DNI' });
+    if (exists) {
+      return res.status(400).json({ success: false, error: "Ya existe un empleado con este DNI" });
     }
 
-    // FOTO DEL EMPLEADO — OPCIONAL
+    // FOTO OPCIONAL
     let photoUrl = null;
-    if (req.file) {
-      const uploadToCloudinary = () => {
-        return new Promise((resolve, reject) => {
-          const stream = cloudinary.uploader.upload_stream(
-            { folder: "attendance-photos" },
-            (err, result) => (err ? reject(err) : resolve(result))
-          );
-          stream.end(req.file.buffer);
-        });
-      };
-      const uploadResult = await uploadToCloudinary();
-      photoUrl = uploadResult.secure_url;
+
+    if (req.file && req.file.buffer && req.file.size > 0) {
+      try {
+        const uploadPhoto = () =>
+          new Promise((resolve, reject) => {
+            const stream = cloudinary.uploader.upload_stream(
+              { folder: "attendance-photos" },
+              (err, result) => (err ? reject(err) : resolve(result))
+            );
+            stream.end(req.file.buffer);
+          });
+
+        const uploadedPhoto = await uploadPhoto();
+        photoUrl = uploadedPhoto.secure_url;
+
+      } catch (err) {
+        console.error("⚠️ Error subiendo foto:", err);
+      }
     }
 
     // INSERTAR EMPLEADO
@@ -86,33 +87,30 @@ router.post('/', authenticateToken, requireAdminOrScanner, upload.single('photo'
 
     const employeeId = created.id;
 
-    // 🔥 GENERAR QR AUTOMÁTICAMENTE
-    const qrBuffer = qr.imageSync(employeeId.toString(), { type: 'png' });
+    // GENERAR QR AUTOMÁTICAMENTE
+    const qrBuffer = qr.imageSync(employeeId.toString(), { type: "png" });
 
-    // SUBIR QR A CLOUDINARY
-    const uploadQR = () => {
-      return new Promise((resolve, reject) => {
+    const uploadQR = () =>
+      new Promise((resolve, reject) => {
         const stream = cloudinary.uploader.upload_stream(
           { folder: "attendance-qrs", format: "png" },
           (err, result) => (err ? reject(err) : resolve(result))
         );
         stream.end(qrBuffer);
       });
-    };
 
-    const qrUpload = await uploadQR();
+    const qrUploaded = await uploadQR();
 
-    // GUARDAR URL EN DB
     await runQuery(
       "UPDATE employees SET qr_code = $1 WHERE id = $2",
-      [qrUpload.secure_url, employeeId]
+      [qrUploaded.secure_url, employeeId]
     );
 
     res.json({
       success: true,
       message: "Empleado creado correctamente",
       employee_id: employeeId,
-      qr_url: qrUpload.secure_url
+      qr_url: qrUploaded.secure_url
     });
 
   } catch (error) {
@@ -121,116 +119,110 @@ router.post('/', authenticateToken, requireAdminOrScanner, upload.single('photo'
   }
 });
 
-
-/* ================================================================
-   PUT /api/employees/:id - Actualizar empleado
-================================================================ */
-router.put('/:id', authenticateToken, requireAdminOrScanner, upload.single('photo'), async (req, res) => {
-  try {
-    const { name, dni, type, monthly_salary, remove_photo } = req.body;
-    const employeeId = req.params.id;
-
-    if (!name || !dni || !type) {
-      return res.status(400).json({ success: false, error: 'Nombre, DNI y tipo requeridos' });
-    }
-
-    if (dni.length !== 13) {
-      return res.status(400).json({ success: false, error: 'DNI debe tener 13 dígitos' });
-    }
-
-    const employee = await getQuery(
-      'SELECT id, photo FROM employees WHERE id = $1 AND is_active = TRUE',
-      [employeeId]
-    );
-
-    if (!employee) {
-      return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
-    }
-
-    // Verificar duplicado de DNI
-    const duplicate = await getQuery(
-      'SELECT id FROM employees WHERE dni = $1 AND id != $2 AND is_active = TRUE',
-      [dni, employeeId]
-    );
-
-    if (duplicate) {
-      return res.status(400).json({ success: false, error: 'Otro empleado tiene este DNI' });
-    }
-
-    let photoUrl = employee.photo;
-
-    if (remove_photo === "true" && employee.photo) {
-      try {
-        const publicId = employee.photo.split("/").slice(-1)[0].split(".")[0];
-        await cloudinary.uploader.destroy(`attendance-photos/${publicId}`);
-      } catch (e) {
-        console.log("⚠️ No se pudo eliminar foto previa:", e.message);
-      }
-      photoUrl = null;
-    }
-
-    if (req.file) {
-      photoUrl = req.file.path;
-    }
-
-    await runQuery(
-      `UPDATE employees 
-       SET name = $1, dni = $2, type = $3, monthly_salary = $4, 
-           photo = $5, updated_at = NOW()
-       WHERE id = $6`,
-      [name, dni, type, monthly_salary || 0, photoUrl, employeeId]
-    );
-
-    const updated = await getQuery(
-      'SELECT * FROM employees WHERE id = $1',
-      [employeeId]
-    );
-
-    res.json({ success: true, message: "Empleado actualizado", data: updated });
-
-  } catch (error) {
-    console.error('❌ Error actualizando empleado:', error);
-    res.status(500).json({ success: false, error: 'Error actualizando empleado' });
-  }
-});
-
-/* ================================================================
-   DELETE /api/employees/:id - Soft delete
-================================================================ */
-router.delete('/:id', authenticateToken, requireAdminOrScanner, async (req, res) => {
+// ==================================================
+// UPDATE EMPLOYEE (Regenera QR si cambia el DNI)
+// ==================================================
+router.put("/:id", authenticateToken, requireAdminOrScanner, upload.single("photo"), async (req, res) => {
   try {
     const employeeId = req.params.id;
+    const { dni, name, type, monthly_salary, remove_photo } = req.body;
 
-    const employee = await getQuery(
-      'SELECT id, photo FROM employees WHERE id = $1 AND is_active = TRUE',
+    const existing = await getQuery(
+      "SELECT dni, photo, qr_code FROM employees WHERE id = $1 AND is_active = TRUE",
       [employeeId]
     );
 
-    if (!employee) {
-      return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: "Empleado no encontrado" });
     }
 
-    if (employee.photo) {
+    let newPhoto = existing.photo;
+
+    // FOTO NUEVA
+    if (req.file && req.file.buffer && req.file.size > 0) {
       try {
-        const publicId = employee.photo.split("/").slice(-1)[0].split(".")[0];
-        await cloudinary.uploader.destroy(`attendance-photos/${publicId}`);
-      } catch (e) {
-        console.log("⚠️ Error eliminando foto:", e.message);
+        const uploadPhoto = () =>
+          new Promise((resolve, reject) => {
+            const stream = cloudinary.uploader.upload_stream(
+              { folder: "attendance-photos" },
+              (err, result) => (err ? reject(err) : resolve(result))
+            );
+            stream.end(req.file.buffer);
+          });
+
+        const uploadedPhoto = await uploadPhoto();
+        newPhoto = uploadedPhoto.secure_url;
+      } catch (err) {
+        console.log("⚠️ Error subiendo foto:", err);
       }
     }
 
+    // ELIMINAR FOTO
+    if (remove_photo === "true" && existing.photo) {
+      try {
+        const publicId = existing.photo.split("/").slice(-1)[0].split(".")[0];
+        await cloudinary.uploader.destroy(`attendance-photos/${publicId}`);
+      } catch (err) {}
+      newPhoto = null;
+    }
+
+    // ACTUALIZAR EMPLEADO
     await runQuery(
-      'UPDATE employees SET is_active = FALSE, updated_at = NOW() WHERE id = $1',
+      `UPDATE employees
+       SET dni=$1, name=$2, type=$3, monthly_salary=$4, photo=$5
+       WHERE id=$6`,
+      [dni, name, type, monthly_salary || 0, newPhoto, employeeId]
+    );
+
+    // REGENERAR QR SOLO SI CAMBIÓ EL DNI
+    if (dni !== existing.dni) {
+      const qrBuffer = qr.imageSync(employeeId.toString(), { type: "png" });
+
+      const uploadQR = () =>
+        new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { folder: "attendance-qrs", format: "png" },
+            (err, result) => (err ? reject(err) : resolve(result))
+          );
+          stream.end(qrBuffer);
+        });
+
+      const qrUploaded = await uploadQR();
+
+      await runQuery(
+        "UPDATE employees SET qr_code = $1 WHERE id = $2",
+        [qrUploaded.secure_url, employeeId]
+      );
+    }
+
+    res.json({ success: true, message: "Empleado actualizado correctamente" });
+
+  } catch (error) {
+    console.error("❌ Error actualizando empleado:", error);
+    res.status(500).json({ success: false, error: "Error actualizando empleado" });
+  }
+});
+
+// ==================================================
+// SOFT DELETE EMPLOYEE
+// ==================================================
+router.delete("/:id", authenticateToken, requireAdminOrScanner, async (req, res) => {
+  try {
+    const employeeId = req.params.id;
+
+    await runQuery(
+      "UPDATE employees SET is_active = FALSE WHERE id = $1",
       [employeeId]
     );
 
-    res.json({ success: true, message: "Empleado eliminado" });
+    res.json({ success: true, message: "Empleado eliminado correctamente" });
 
   } catch (error) {
-    console.error('❌ Error eliminando empleado:', error);
-    res.status(500).json({ success: false, error: 'Error eliminando empleado' });
+    console.error("❌ Error eliminando empleado:", error);
+    res.status(500).json({ success: false, error: "Error eliminando empleado" });
   }
 });
+
 
 
 /* ================================================================
