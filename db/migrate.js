@@ -7,7 +7,7 @@ async function runMigration() {
   try {
     console.log("🚀 Ejecutando migración PostgreSQL...");
 
-    const schemaPath = path.join(__dirname, '../schema.sql');
+    const schemaPath = path.join(__dirname, './schema.sql');
     const schemaSQL = fs.readFileSync(schemaPath, 'utf8');
 
     await pool.query(schemaSQL);
