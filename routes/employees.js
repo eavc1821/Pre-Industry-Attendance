@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const qr = require("qr-image");
-const { runQuery, getQuery } = require("../db");
+const { runQuery, getQuery } = require("../config/database");
 const { authenticateToken, requireAdminOrScanner } = require("../middleware/auth");
 const cloudinary = require("../cloudinary");
 const upload = require("../config/multerCloudinary");
