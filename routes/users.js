@@ -6,7 +6,7 @@ const { authenticateToken, requireSuperAdmin } = require('../middleware/auth');
 const router = express.Router();
 
 // ROLES PERMITIDOS (NO incluye super_admin para evitar riesgos)
-const allowedRoles = ['admin', 'scanner', 'viewer'];
+const allowedRoles = ['super_admin', 'admin', 'scanner', 'viewer'];
 
 /* ================================================================
    GET /api/users - Listado de usuarios
