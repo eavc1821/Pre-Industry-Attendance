@@ -12,104 +12,115 @@ const router = express.Router();
 ================================================================ */
 router.get('/', authenticateToken, async (req, res) => {
   try {
-    const employees = await allQuery(`
+    const employees = await runQuery(`
       SELECT 
-        id, name, dni, type, monthly_salary, 
-        photo, qr_code, is_active, created_at
-      FROM employees 
+        id,
+        dni,
+        name,
+        type,
+        monthly_salary,
+        photo,
+        qr_code,
+        is_active
+      FROM employees
       WHERE is_active = TRUE
-      ORDER BY name ASC
+      ORDER BY id DESC
     `);
 
     res.json({
       success: true,
-      data: employees,
-      count: employees.length
+      data: employees
     });
 
   } catch (error) {
-    console.error('❌ Error obteniendo empleados:', error);
-    res.status(500).json({ success: false, error: 'Error obteniendo empleados' });
+    console.error("❌ Error obteniendo empleados:", error);
+    res.status(500).json({ success: false, error: "Error obteniendo empleados" });
   }
 });
+
 
 /* ================================================================
    POST /api/employees - Crear empleado + QR automático
 ================================================================ */
 router.post('/', authenticateToken, requireAdminOrScanner, upload.single('photo'), async (req, res) => {
   try {
-    const { name, dni, type, monthly_salary } = req.body;
+    const { dni, name, type, monthly_salary } = req.body;
 
-    if (!name || !dni || !type) {
-      return res.status(400).json({ success: false, error: 'Nombre, DNI y tipo son requeridos' });
+    // VALIDACIONES
+    if (!dni || dni.length !== 13) {
+      return res.status(400).json({ success: false, error: 'DNI inválido (13 dígitos)' });
     }
 
-    if (dni.length !== 13) {
-      return res.status(400).json({ success: false, error: 'DNI debe tener 13 dígitos' });
-    }
-
-    if (type === "Al Dia" && (!monthly_salary || monthly_salary <= 0)) {
-      return res.status(400).json({ success: false, error: 'Salario mensual requerido para empleados Al Día' });
-    }
-
-    // DNI único
-    const exists = await getQuery(
+    const existing = await getQuery(
       'SELECT id FROM employees WHERE dni = $1 AND is_active = TRUE',
       [dni]
     );
 
-    if (exists) {
-      return res.status(400).json({ success: false, error: 'DNI ya está registrado' });
+    if (existing) {
+      return res.status(400).json({ success: false, error: 'Ya existe un empleado con este DNI' });
     }
 
-    const photoUrl = req.file?.path || null;
+    // FOTO DEL EMPLEADO — OPCIONAL
+    let photoUrl = null;
+    if (req.file) {
+      const uploadToCloudinary = () => {
+        return new Promise((resolve, reject) => {
+          const stream = cloudinary.uploader.upload_stream(
+            { folder: "attendance-photos" },
+            (err, result) => (err ? reject(err) : resolve(result))
+          );
+          stream.end(req.file.buffer);
+        });
+      };
+      const uploadResult = await uploadToCloudinary();
+      photoUrl = uploadResult.secure_url;
+    }
 
-    // Crear empleado
-    const insert = await runQuery(
-      `INSERT INTO employees (name, dni, type, monthly_salary, photo)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, photo`,
-      [name, dni, type, monthly_salary, photoUrl]
+    // INSERTAR EMPLEADO
+    const created = await runQuery(
+      `INSERT INTO employees (dni, name, type, monthly_salary, photo, is_active)
+       VALUES ($1, $2, $3, $4, $5, TRUE)
+       RETURNING id`,
+      [dni, name, type, monthly_salary || 0, photoUrl]
     );
 
-    const employeeId = insert[0].id;
+    const employeeId = created.id;
 
-    /* ---------------------------
-       Generar QR
-    --------------------------- */
+    // 🔥 GENERAR QR AUTOMÁTICAMENTE
     const qrBuffer = qr.imageSync(employeeId.toString(), { type: 'png' });
 
-    const uploadQr = () => new Promise((resolve, reject) => {
-      const uploader = cloudinary.uploader.upload_stream(
-        { folder: "attendance-qr", format: "png" },
-        (err, result) => (err ? reject(err) : resolve(result))
-      );
-      uploader.end(qrBuffer);
-    });
+    // SUBIR QR A CLOUDINARY
+    const uploadQR = () => {
+      return new Promise((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+          { folder: "attendance-qrs", format: "png" },
+          (err, result) => (err ? reject(err) : resolve(result))
+        );
+        stream.end(qrBuffer);
+      });
+    };
 
-    const qrUpload = await uploadQr();
+    const qrUpload = await uploadQR();
 
+    // GUARDAR URL EN DB
     await runQuery(
-      `UPDATE employees SET qr_code = $1 WHERE id = $2`,
+      "UPDATE employees SET qr_code = $1 WHERE id = $2",
       [qrUpload.secure_url, employeeId]
     );
 
-    const newEmployee = await getQuery(
-      'SELECT * FROM employees WHERE id = $1',
-      [employeeId]
-    );
-
-    res.status(201).json({
+    res.json({
       success: true,
-      message: "Empleado creado exitosamente",
-      data: newEmployee
+      message: "Empleado creado correctamente",
+      employee_id: employeeId,
+      qr_url: qrUpload.secure_url
     });
 
   } catch (error) {
-    console.error('❌ Error creando empleado:', error);
-    res.status(500).json({ success: false, error: 'Error al crear empleado' });
+    console.error("❌ Error creando empleado:", error);
+    res.status(500).json({ success: false, error: "Error creando empleado" });
   }
 });
+
 
 /* ================================================================
    PUT /api/employees/:id - Actualizar empleado
@@ -221,61 +232,6 @@ router.delete('/:id', authenticateToken, requireAdminOrScanner, async (req, res)
   }
 });
 
-/* ================================================================
-   POST /employees/:id/generate-qr - Regenerar QR
-================================================================ */
-router.post('/:id/generate-qr', authenticateToken, requireAdminOrScanner, async (req, res) => {
-  try {
-    const employeeId = req.params.id;
-
-    const employee = await getQuery(
-      'SELECT id, qr_code FROM employees WHERE id = $1 AND is_active = TRUE',
-      [employeeId]
-    );
-
-    if (!employee) {
-      return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
-    }
-
-    const qrBuffer = qr.imageSync(employeeId.toString(), { type: 'png' });
-
-    if (employee.qr_code) {
-      try {
-        const publicId = employee.qr_code.split("/").slice(-1)[0].split(".")[0];
-        await cloudinary.uploader.destroy(`attendance-qr/${publicId}`);
-      } catch (e) {
-        console.log("⚠️ No se pudo eliminar QR previo:", e.message);
-      }
-    }
-
-    const uploadToCloudinary = () => {
-      return new Promise((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
-          { folder: "attendance-qr", format: "png" },
-          (err, result) => (err ? reject(err) : resolve(result))
-        );
-        stream.end(qrBuffer);
-      });
-    };
-
-    const qrUpload = await uploadToCloudinary();
-
-    await runQuery(
-      'UPDATE employees SET qr_code = $1 WHERE id = $2',
-      [qrUpload.secure_url, employeeId]
-    );
-
-    res.json({
-      success: true,
-      message: "QR actualizado correctamente",
-      qr_url: qrUpload.secure_url
-    });
-
-  } catch (error) {
-    console.error("❌ Error generando QR:", error);
-    res.status(500).json({ success: false, error: "Error generando QR" });
-  }
-});
 
 /* ================================================================
    GET /employees/:id/stats - Estadísticas (POSTGRES)
