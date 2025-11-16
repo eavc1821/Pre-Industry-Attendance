@@ -13,14 +13,12 @@ const getLocalDate = () => {
 };
 
 /* ================================================================
-   POST /api/attendance/entry - Registrar entrada (TIMESTAMP REAL)
-   ================================================================ */
+   POST /api/attendance/entry - Registrar entrada
+================================================================ */
 router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res) => {
   try {
     const { employee_id } = req.body;
     const today = getLocalDate();
-
-    console.log('📥 Recibiendo solicitud de entrada:', { employee_id, today });
 
     if (!employee_id) {
       return res.status(400).json({
@@ -31,7 +29,7 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
 
     // Verificar si el empleado existe
     const employee = await getQuery(
-      'SELECT id, name, type FROM employees WHERE id = ? AND is_active = true',
+      'SELECT id, name, type FROM employees WHERE id = $1 AND is_active = TRUE',
       [employee_id]
     );
 
@@ -44,7 +42,7 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
 
     // Verificar si ya existe entrada hoy
     const existingRecord = await getQuery(
-      'SELECT id, exit_time FROM attendance WHERE employee_id = ? AND date = ?',
+      'SELECT id, exit_time FROM attendance WHERE employee_id = $1 AND date = $2',
       [employee_id, today]
     );
 
@@ -62,28 +60,26 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
       }
     }
 
-    // Obtener timestamp completo
     const entryTimestamp = new Date().toISOString();
 
-    console.log('⏰ Registrando entrada:', { entryTimestamp });
-
+    // PostgreSQL necesita RETURNING id para obtener el id insertado
     const result = await runQuery(
       `INSERT INTO attendance (employee_id, date, entry_time, created_at)
-       VALUES (?, ?, ?, ?)`,
-      [employee_id, today, entryTimestamp, entryTimestamp]
+       VALUES ($1, $2, $3, $3)
+       RETURNING id`,
+      [employee_id, today, entryTimestamp]
     );
 
     res.status(201).json({
       success: true,
       message: `Entrada registrada para ${employee.name}`,
       data: {
-        id: result.id,
+        id: result[0].id,
         employee_id,
         employee_name: employee.name,
         employee_type: employee.type,
         date: today,
         entry_time: entryTimestamp,
-        entry_datetime: entryTimestamp,
         status: 'active'
       }
     });
@@ -98,11 +94,9 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
 });
 
 /* ================================================================
-   POST /api/attendance/exit - Registrar salida (TIMESTAMP REAL)
-   ================================================================ */
+   POST /api/attendance/exit - Registrar salida
+================================================================ */
 router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) => {
-  console.log('🚨 ===== INICIANDO REGISTRO DE SALIDA =====');
-
   try {
     const { employee_id, hours_extra = 0, despalillo = 0, escogida = 0, monado = 0 } = req.body;
     const today = getLocalDate();
@@ -111,11 +105,9 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
       return res.status(400).json({ success: false, error: 'ID de empleado es requerido' });
     }
 
-    const employeeIdNum = parseInt(employee_id);
-
     const employee = await getQuery(
-      'SELECT id, name, type, is_active FROM employees WHERE id = ?',
-      [employeeIdNum]
+      'SELECT id, name, type, is_active FROM employees WHERE id = $1',
+      [employee_id]
     );
 
     if (!employee) {
@@ -131,8 +123,8 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
       `SELECT a.*, e.name, e.type 
        FROM attendance a 
        JOIN employees e ON a.employee_id = e.id 
-       WHERE a.employee_id = ? AND a.date = ? AND a.exit_time IS NULL`,
-      [employeeIdNum, today]
+       WHERE a.employee_id = $1 AND a.date = $2 AND a.exit_time IS NULL`,
+      [employee_id, today]
     );
 
     if (!attendanceRecord) {
@@ -166,24 +158,21 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
       septimo_dia = total_produccion * 0.181818;
     }
 
-    // Timestamp real para salida
     const exitTimestamp = new Date().toISOString();
-
-    console.log('🔄 Ejecutando UPDATE...');
 
     await runQuery(
       `UPDATE attendance 
-       SET exit_time = ?, 
-           hours_extra = ?, 
-           despalillo = ?, 
-           escogida = ?, 
-           monado = ?,
-           t_despalillo = ?, 
-           t_escogida = ?, 
-           t_monado = ?, 
-           prop_sabado = ?, 
-           septimo_dia = ?
-       WHERE id = ?`,
+       SET exit_time = $1, 
+           hours_extra = $2, 
+           despalillo = $3, 
+           escogida = $4, 
+           monado = $5,
+           t_despalillo = $6, 
+           t_escogida = $7, 
+           t_monado = $8, 
+           prop_sabado = $9, 
+           septimo_dia = $10
+       WHERE id = $11`,
       [
         exitTimestamp,
         hoursExtraNum,
@@ -203,7 +192,7 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
       success: true,
       message: `Salida registrada para ${employee.name}`,
       data: {
-        employee_id: employeeIdNum,
+        employee_id,
         employee_name: employee.name,
         employee_type: employee.type,
         date: today,
@@ -232,8 +221,8 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
 });
 
 /* ================================================================
-   GET /api/attendance/today - Registros del día actual
-   ================================================================ */
+   GET /api/attendance/today
+================================================================ */
 router.get('/today', authenticateToken, async (req, res) => {
   try {
     const today = getLocalDate();
@@ -242,17 +231,17 @@ router.get('/today', authenticateToken, async (req, res) => {
       `
       SELECT 
         a.*,
-        e.name as employee_name,
-        e.dni as employee_dni,
-        e.type as employee_type,
+        e.name AS employee_name,
+        e.dni AS employee_dni,
+        e.type AS employee_type,
         e.photo,
         CASE 
           WHEN a.exit_time IS NULL THEN 'active'
           ELSE 'completed'
-        END as status
+        END AS status
       FROM attendance a
       JOIN employees e ON a.employee_id = e.id
-      WHERE a.date = ?
+      WHERE a.date = $1
       ORDER BY a.entry_time DESC
     `,
       [today]

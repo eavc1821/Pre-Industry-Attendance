@@ -40,7 +40,6 @@ router.post('/', authenticateToken, requireAdminOrScanner, upload.single('photo'
   try {
     const { name, dni, type, monthly_salary } = req.body;
 
-    // Validaciones
     if (!name || !dni || !type) {
       return res.status(400).json({ success: false, error: 'Nombre, DNI y tipo son requeridos' });
     }
@@ -54,25 +53,29 @@ router.post('/', authenticateToken, requireAdminOrScanner, upload.single('photo'
     }
 
     // DNI único
-    const exists = await getQuery('SELECT id FROM employees WHERE dni = ? AND is_active = TRUE', [dni]);
+    const exists = await getQuery(
+      'SELECT id FROM employees WHERE dni = $1 AND is_active = TRUE',
+      [dni]
+    );
+
     if (exists) {
       return res.status(400).json({ success: false, error: 'DNI ya está registrado' });
     }
 
-    // Foto Cloudinary
     const photoUrl = req.file?.path || null;
 
-    // Crear empleado sin QR aún
+    // Crear empleado
     const insert = await runQuery(
       `INSERT INTO employees (name, dni, type, monthly_salary, photo)
-       VALUES (?, ?, ?, ?, ?) RETURNING id`,
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id`,
       [name, dni, type, monthly_salary || 0, photoUrl]
     );
 
-    const employeeId = insert.id;
+    const employeeId = insert[0].id;
 
     /* ---------------------------
-       Generar QR con ID real
+       Generar QR
     --------------------------- */
     const qrBuffer = qr.imageSync(employeeId.toString(), { type: 'png' });
 
@@ -86,12 +89,15 @@ router.post('/', authenticateToken, requireAdminOrScanner, upload.single('photo'
 
     const qrUpload = await uploadQr();
 
-    // Guardar QR URL
-    await runQuery(`UPDATE employees SET qr_code = ? WHERE id = ?`, [
-      qrUpload.secure_url, employeeId
-    ]);
+    await runQuery(
+      `UPDATE employees SET qr_code = $1 WHERE id = $2`,
+      [qrUpload.secure_url, employeeId]
+    );
 
-    const newEmployee = await getQuery('SELECT * FROM employees WHERE id = ?', [employeeId]);
+    const newEmployee = await getQuery(
+      'SELECT * FROM employees WHERE id = $1',
+      [employeeId]
+    );
 
     res.status(201).json({
       success: true,
@@ -122,7 +128,7 @@ router.put('/:id', authenticateToken, requireAdminOrScanner, upload.single('phot
     }
 
     const employee = await getQuery(
-      'SELECT id, photo FROM employees WHERE id = ? AND is_active = TRUE',
+      'SELECT id, photo FROM employees WHERE id = $1 AND is_active = TRUE',
       [employeeId]
     );
 
@@ -130,9 +136,9 @@ router.put('/:id', authenticateToken, requireAdminOrScanner, upload.single('phot
       return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
     }
 
-    // Evitar duplicado de DNI
+    // Verificar duplicado de DNI
     const duplicate = await getQuery(
-      'SELECT id FROM employees WHERE dni = ? AND id != ? AND is_active = TRUE',
+      'SELECT id FROM employees WHERE dni = $1 AND id != $2 AND is_active = TRUE',
       [dni, employeeId]
     );
 
@@ -140,12 +146,8 @@ router.put('/:id', authenticateToken, requireAdminOrScanner, upload.single('phot
       return res.status(400).json({ success: false, error: 'Otro empleado tiene este DNI' });
     }
 
-    /* ---------------------------
-       Manejo de Foto Cloudinary
-    --------------------------- */
     let photoUrl = employee.photo;
 
-    // Si piden eliminar foto
     if (remove_photo === "true" && employee.photo) {
       try {
         const publicId = employee.photo.split("/").slice(-1)[0].split(".")[0];
@@ -156,19 +158,22 @@ router.put('/:id', authenticateToken, requireAdminOrScanner, upload.single('phot
       photoUrl = null;
     }
 
-    // Si subieron nueva foto
     if (req.file) {
       photoUrl = req.file.path;
     }
 
     await runQuery(
       `UPDATE employees 
-       SET name = ?, dni = ?, type = ?, monthly_salary = ?, photo = ?, updated_at = NOW()
-       WHERE id = ?`,
+       SET name = $1, dni = $2, type = $3, monthly_salary = $4, 
+           photo = $5, updated_at = NOW()
+       WHERE id = $6`,
       [name, dni, type, monthly_salary || 0, photoUrl, employeeId]
     );
 
-    const updated = await getQuery('SELECT * FROM employees WHERE id = ?', [employeeId]);
+    const updated = await getQuery(
+      'SELECT * FROM employees WHERE id = $1',
+      [employeeId]
+    );
 
     res.json({ success: true, message: "Empleado actualizado", data: updated });
 
@@ -186,7 +191,7 @@ router.delete('/:id', authenticateToken, requireAdminOrScanner, async (req, res)
     const employeeId = req.params.id;
 
     const employee = await getQuery(
-      'SELECT id, photo FROM employees WHERE id = ? AND is_active = TRUE',
+      'SELECT id, photo FROM employees WHERE id = $1 AND is_active = TRUE',
       [employeeId]
     );
 
@@ -194,7 +199,6 @@ router.delete('/:id', authenticateToken, requireAdminOrScanner, async (req, res)
       return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
     }
 
-    // Eliminar foto Cloudinary si existe
     if (employee.photo) {
       try {
         const publicId = employee.photo.split("/").slice(-1)[0].split(".")[0];
@@ -205,7 +209,7 @@ router.delete('/:id', authenticateToken, requireAdminOrScanner, async (req, res)
     }
 
     await runQuery(
-      'UPDATE employees SET is_active = FALSE, updated_at = NOW() WHERE id = ?',
+      'UPDATE employees SET is_active = FALSE, updated_at = NOW() WHERE id = $1',
       [employeeId]
     );
 
@@ -218,14 +222,14 @@ router.delete('/:id', authenticateToken, requireAdminOrScanner, async (req, res)
 });
 
 /* ================================================================
-   POST /generate-qr - Generar/Regenerar QR Cloudinary
+   POST /employees/:id/generate-qr - Regenerar QR
 ================================================================ */
 router.post('/:id/generate-qr', authenticateToken, requireAdminOrScanner, async (req, res) => {
   try {
     const employeeId = req.params.id;
 
     const employee = await getQuery(
-      'SELECT id, qr_code FROM employees WHERE id = ? AND is_active = TRUE',
+      'SELECT id, qr_code FROM employees WHERE id = $1 AND is_active = TRUE',
       [employeeId]
     );
 
@@ -235,7 +239,6 @@ router.post('/:id/generate-qr', authenticateToken, requireAdminOrScanner, async 
 
     const qrBuffer = qr.imageSync(employeeId.toString(), { type: 'png' });
 
-    // Si tiene QR previo, eliminarlo
     if (employee.qr_code) {
       try {
         const publicId = employee.qr_code.split("/").slice(-1)[0].split(".")[0];
@@ -258,7 +261,7 @@ router.post('/:id/generate-qr', authenticateToken, requireAdminOrScanner, async 
     const qrUpload = await uploadToCloudinary();
 
     await runQuery(
-      'UPDATE employees SET qr_code = ? WHERE id = ?',
+      'UPDATE employees SET qr_code = $1 WHERE id = $2',
       [qrUpload.secure_url, employeeId]
     );
 
@@ -283,7 +286,7 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
 
     const employee = await getQuery(
       `SELECT id, name, type, monthly_salary 
-       FROM employees WHERE id = ? AND is_active = TRUE`,
+       FROM employees WHERE id = $1 AND is_active = TRUE`,
       [employeeId]
     );
 
@@ -308,9 +311,9 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
           COALESCE(SUM(t_monado), 0) as t_monado,
           COALESCE(SUM(septimo_dia), 0) as septimo_dia
         FROM attendance
-        WHERE employee_id = ?
-        AND EXTRACT(YEAR FROM date) = ?
-        AND EXTRACT(MONTH FROM date) = ?
+        WHERE employee_id = $1
+        AND EXTRACT(YEAR FROM date) = $2
+        AND EXTRACT(MONTH FROM date) = $3
         AND exit_time IS NOT NULL
         `,
         [employeeId, year, month]
@@ -339,9 +342,9 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
         COUNT(*) as dias_trabajados,
         COALESCE(SUM(hours_extra), 0) as horas_extras
       FROM attendance
-      WHERE employee_id = ?
-      AND EXTRACT(YEAR FROM date) = ?
-      AND EXTRACT(MONTH FROM date) = ?
+      WHERE employee_id = $1
+      AND EXTRACT(YEAR FROM date) = $2
+      AND EXTRACT(MONTH FROM date) = $3
       AND exit_time IS NOT NULL
       `,
       [employeeId, year, month]

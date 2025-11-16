@@ -5,24 +5,24 @@ const { authenticateToken, requireSuperAdmin } = require('../middleware/auth');
 
 const router = express.Router();
 
-// ROLES PERMITIDOS (NO incluye super_admin para evitar riesgos)
+// ROLES PERMITIDOS
 const allowedRoles = ['super_admin', 'admin', 'scanner', 'viewer'];
 
 /* ================================================================
-   GET /api/users - Listado de usuarios
-   ================================================================ */
+   GET /api/users - Listado de usuarios (solo super_admin)
+================================================================ */
 router.get('/', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const users = await allQuery(`
       SELECT 
-        id, 
-        username, 
-        role, 
+        id,
+        username,
+        role,
         is_active,
         created_at,
         updated_at
-      FROM users 
-      WHERE is_active = true
+      FROM users
+      WHERE is_active = TRUE
       ORDER BY created_at DESC
     `);
 
@@ -43,12 +43,13 @@ router.get('/', authenticateToken, requireSuperAdmin, async (req, res) => {
 
 /* ================================================================
    GET /api/users/:id - Obtener usuario por ID
-   ================================================================ */
+================================================================ */
 router.get('/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const user = await getQuery(
       `SELECT id, username, role, created_at, updated_at 
-       FROM users WHERE id = ? AND is_active = true`,
+       FROM users 
+       WHERE id = $1 AND is_active = TRUE`,
       [req.params.id]
     );
 
@@ -74,13 +75,12 @@ router.get('/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
 });
 
 /* ================================================================
-   POST /api/users - Crear nuevo usuario
-   ================================================================ */
+   POST /api/users - Crear usuario
+================================================================ */
 router.post('/', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const { username, password, role } = req.body;
 
-    // Validaciones básicas
     if (!username || !password || !role) {
       return res.status(400).json({
         success: false,
@@ -96,10 +96,7 @@ router.post('/', authenticateToken, requireSuperAdmin, async (req, res) => {
     }
 
     if (!allowedRoles.includes(role)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Rol no válido'
-      });
+      return res.status(400).json({ success: false, error: 'Rol no válido' });
     }
 
     if (password.length < 6) {
@@ -109,9 +106,8 @@ router.post('/', authenticateToken, requireSuperAdmin, async (req, res) => {
       });
     }
 
-    // Verificar duplicados
     const existingUser = await getQuery(
-      'SELECT id FROM users WHERE username = ? AND is_active = true',
+      'SELECT id FROM users WHERE username = $1 AND is_active = TRUE',
       [username]
     );
 
@@ -122,17 +118,21 @@ router.post('/', authenticateToken, requireSuperAdmin, async (req, res) => {
       });
     }
 
-    // Hash contraseña
-    const hashedPassword = await bcrypt.hash(password, 10);
+    const hashed = await bcrypt.hash(password, 10);
 
     const result = await runQuery(
-      'INSERT INTO users (username, password, role) VALUES (?, ?, ?)',
-      [username, hashedPassword, role]
+      `INSERT INTO users (username, password, role)
+       VALUES ($1, $2, $3)
+       RETURNING id`,
+      [username, hashed, role]
     );
 
+    const userId = result[0].id;
+
     const newUser = await getQuery(
-      'SELECT id, username, role, created_at FROM users WHERE id = ?',
-      [result.id]
+      `SELECT id, username, role, created_at 
+       FROM users WHERE id = $1`,
+      [userId]
     );
 
     res.status(201).json({
@@ -152,70 +152,50 @@ router.post('/', authenticateToken, requireSuperAdmin, async (req, res) => {
 
 /* ================================================================
    PUT /api/users/:id - Actualizar usuario
-   ================================================================ */
+================================================================ */
 router.put('/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const { username, password, role } = req.body;
     const userId = req.params.id;
 
-    // Validar existencia
-    const existingUser = await getQuery(
-      'SELECT id, role FROM users WHERE id = ? AND is_active = true',
+    const existing = await getQuery(
+      'SELECT id, role FROM users WHERE id = $1 AND is_active = TRUE',
       [userId]
     );
 
-    if (!existingUser) {
-      return res.status(404).json({
-        success: false,
-        error: 'Usuario no encontrado'
-      });
-    }
-
-    // Proteger super_admin
-    if (existingUser.role === 'super_admin') {
-      return res.status(400).json({
-        success: false,
-        error: 'No se puede modificar un Super Administrador'
-      });
-    }
-
-    if (!username || !role) {
-      return res.status(400).json({
-        success: false,
-        error: 'Usuario y rol son obligatorios'
-      });
-    }
-
-    if (/\s/.test(username)) {
-      return res.status(400).json({
-        success: false,
-        error: 'El usuario no puede contener espacios'
-      });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Usuario no encontrado' });
     }
 
     if (!allowedRoles.includes(role)) {
-      return res.status(400).json({
-        success: false,
-        error: 'Rol no válido'
-      });
+      return res.status(400).json({ success: false, error: 'Rol no válido' });
     }
 
-    // Verificar duplicado de username
+    if (!username) {
+      return res.status(400).json({ success: false, error: 'El nombre de usuario es requerido' });
+    }
+
+    if (/\s/.test(username)) {
+      return res.status(400).json({ success: false, error: 'Usuario no puede contener espacios' });
+    }
+
+    // Verificar duplicados
     const duplicate = await getQuery(
-      'SELECT id FROM users WHERE username = ? AND id != ? AND is_active = true',
+      `SELECT id FROM users 
+       WHERE username = $1 AND id != $2 AND is_active = TRUE`,
       [username, userId]
     );
 
     if (duplicate) {
       return res.status(400).json({
         success: false,
-        error: 'Ya existe otro usuario con este nombre'
+        error: 'Ya existe otro usuario con ese nombre'
       });
     }
 
-    // Armar update
-    let updateQuery = 'UPDATE users SET username = ?, role = ?, updated_at = NOW()';
-    let params = [username, role];
+    // Armar UPDATE dinámico
+    let updateQuery = `UPDATE users SET username = $1, role = $2, updated_at = NOW()`;
+    const params = [username, role];
 
     if (password && password.trim() !== '') {
       if (password.length < 6) {
@@ -225,69 +205,64 @@ router.put('/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
         });
       }
       const hashed = await bcrypt.hash(password, 10);
-      updateQuery += ', password = ?';
+      updateQuery += `, password = $3`;
       params.push(hashed);
     }
 
-    updateQuery += ' WHERE id = ?';
+    updateQuery += ` WHERE id = ${password ? '$4' : '$3'}`;
     params.push(userId);
 
     await runQuery(updateQuery, params);
 
-    const updatedUser = await getQuery(
-      'SELECT id, username, role, created_at, updated_at FROM users WHERE id = ?',
+    const updated = await getQuery(
+      `SELECT id, username, role, created_at, updated_at 
+       FROM users WHERE id = $1`,
       [userId]
     );
 
     res.json({
       success: true,
       message: 'Usuario actualizado correctamente',
-      data: updatedUser
+      data: updated
     });
 
   } catch (error) {
     console.error('Error actualizando usuario:', error);
-    res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 
 /* ================================================================
    DELETE /api/users/:id - Soft delete
-   ================================================================ */
+================================================================ */
 router.delete('/:id', authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const userId = req.params.id;
 
-    const existingUser = await getQuery(
-      'SELECT id, role FROM users WHERE id = ? AND is_active = true',
+    const existing = await getQuery(
+      'SELECT id, role FROM users WHERE id = $1 AND is_active = TRUE',
       [userId]
     );
 
-    if (!existingUser) {
-      return res.status(404).json({
-        success: false,
-        error: 'Usuario no encontrado'
-      });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Usuario no encontrado' });
     }
 
-    if (existingUser.role === 'super_admin') {
+    if (existing.role === 'super_admin') {
       return res.status(400).json({
         success: false,
-        error: 'No se puede eliminar un Super Administrador'
+        error: 'No se puede eliminar un super_administrador'
       });
     }
 
     await runQuery(
-      'UPDATE users SET is_active = false, updated_at = NOW() WHERE id = ?',
+      'UPDATE users SET is_active = FALSE, updated_at = NOW() WHERE id = $1',
       [userId]
     );
 
     res.json({
       success: true,
-      message: 'Usuario eliminado exitosamente'
+      message: 'Usuario eliminado correctamente'
     });
 
   } catch (error) {

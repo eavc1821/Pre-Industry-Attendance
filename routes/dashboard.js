@@ -4,12 +4,14 @@ const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/dashboard/stats - Estadísticas del dashboard
+/* ================================================================
+   GET /api/dashboard/stats
+   Estadísticas del dashboard (PostgreSQL compatible)
+================================================================ */
 router.get('/stats', authenticateToken, async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
-    
-    // Obtener todas las estadísticas en paralelo
+
     const [
       totalEmployees,
       todayAttendance,
@@ -17,56 +19,67 @@ router.get('/stats', authenticateToken, async (req, res) => {
       weeklyStats,
       recentActivity
     ] = await Promise.all([
-      // Total de empleados activos
-      getQuery('SELECT COUNT(*) as count FROM employees WHERE is_active = true'),
       
-      // Asistencia de hoy
-      getQuery('SELECT COUNT(*) as count FROM attendance WHERE date = ?', [today]),
-      
-      // Salidas pendientes
+      // Total empleados activos
       getQuery(`
-        SELECT COUNT(*) as count 
+        SELECT COUNT(*) AS count 
+        FROM employees 
+        WHERE is_active = TRUE
+      `),
+
+      // Asistencia de hoy
+      getQuery(`
+        SELECT COUNT(*) AS count 
         FROM attendance 
-        WHERE date = ? AND exit_time IS NULL
+        WHERE date = $1
       `, [today]),
-      
-      // Estadísticas semanales
+
+      // Salidas pendientes hoy
+      getQuery(`
+        SELECT COUNT(*) AS count 
+        FROM attendance 
+        WHERE date = $1 
+          AND exit_time IS NULL
+      `, [today]),
+
+      // Estadísticas semanales (últimos 7 días)
       getQuery(`
         SELECT 
-          COUNT(DISTINCT employee_id) as employees_this_week,
+          COUNT(DISTINCT employee_id) AS employees_this_week,
           SUM(
-              CASE 
-                WHEN exit_time IS NOT NULL THEN 
-                  EXTRACT(EPOCH FROM (exit_time - entry_time)) / 3600
-                ELSE 0
-              END
-            ) AS total_hours
-        FROM attendance 
+            CASE 
+              WHEN exit_time IS NOT NULL THEN 
+                EXTRACT(EPOCH FROM (exit_time - entry_time)) / 3600
+              ELSE 0
+            END
+          ) AS total_hours
+        FROM attendance
         WHERE date BETWEEN (CURRENT_DATE - INTERVAL '7 days') AND CURRENT_DATE
+      `),
 
-      `, [today]),
-      
-      // Actividad reciente (últimos 5 registros)
+      // Actividad reciente de HOY
       allQuery(`
         SELECT 
-          e.name as employee_name,
+          e.name AS employee_name,
           a.date,
           a.entry_time,
           a.exit_time,
           CASE 
             WHEN a.exit_time IS NULL THEN 'Entrada'
             ELSE 'Salida'
-          END as action_type
+          END AS action_type
         FROM attendance a
         JOIN employees e ON a.employee_id = e.id
-        WHERE a.date = ?
+        WHERE a.date = $1
         ORDER BY a.entry_time DESC
         LIMIT 5
       `, [today])
     ]);
 
-    // Calcular horas semanales
-    const weeklyHours = weeklyStats ? Math.round(weeklyStats.total_hours * 10) / 10 : 0;
+    const weeklyHours =
+      weeklyStats && weeklyStats.total_hours
+        ? Math.round(weeklyStats.total_hours * 10) / 10
+        : 0;
 
     res.json({
       success: true,
@@ -90,11 +103,14 @@ router.get('/stats', authenticateToken, async (req, res) => {
   }
 });
 
-// GET /api/dashboard/attendance-today - Asistencia de hoy
+/* ================================================================
+   GET /api/dashboard/attendance-today
+   Asistencia del día actual
+================================================================ */
 router.get('/attendance-today', authenticateToken, async (req, res) => {
   try {
     const today = new Date().toISOString().split('T')[0];
-    
+
     const attendance = await allQuery(`
       SELECT 
         e.name,
@@ -106,10 +122,10 @@ router.get('/attendance-today', authenticateToken, async (req, res) => {
         CASE 
           WHEN a.exit_time IS NULL THEN 'working'
           ELSE 'completed'
-        END as status
+        END AS status
       FROM attendance a
       JOIN employees e ON a.employee_id = e.id
-      WHERE a.date = ?
+      WHERE a.date = $1
       ORDER BY a.entry_time DESC
     `, [today]);
 

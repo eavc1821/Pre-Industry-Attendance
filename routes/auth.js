@@ -6,12 +6,11 @@ const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
 
-// 🔐 JWT SECRET desde variables de entorno (NO desde middleware)
 const JWT_SECRET = process.env.JWT_SECRET;
 
 /* ================================================================
    POST /api/auth/login
-   ================================================================ */
+================================================================ */
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -30,8 +29,9 @@ router.post('/login', async (req, res) => {
       });
     }
 
+    // PostgreSQL: usar $1
     const user = await getQuery(
-      'SELECT * FROM users WHERE username = ? AND is_active = true',
+      'SELECT * FROM users WHERE username = $1 AND is_active = TRUE',
       [username]
     );
 
@@ -43,15 +43,14 @@ router.post('/login', async (req, res) => {
     }
 
     // Comparar contraseña
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
+    const isValid = await bcrypt.compare(password, user.password);
+    if (!isValid) {
       return res.status(401).json({
         success: false,
         error: 'Credenciales inválidas'
       });
     }
 
-    // Crear token
     const token = jwt.sign(
       {
         id: user.id,
@@ -62,7 +61,6 @@ router.post('/login', async (req, res) => {
       { expiresIn: '24h' }
     );
 
-    // Respuesta
     res.json({
       success: true,
       token,
@@ -83,8 +81,8 @@ router.post('/login', async (req, res) => {
 });
 
 /* ================================================================
-   POST /api/auth/verify - Verificar token
-   ================================================================ */
+   POST /api/auth/verify
+================================================================ */
 router.post('/verify', async (req, res) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -98,9 +96,8 @@ router.post('/verify', async (req, res) => {
 
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    // Verificar que el usuario existe
     const user = await getQuery(
-      'SELECT id, username, role FROM users WHERE id = ? AND is_active = true',
+      'SELECT id, username, role FROM users WHERE id = $1 AND is_active = TRUE',
       [decoded.id]
     );
 
@@ -120,14 +117,14 @@ router.post('/verify', async (req, res) => {
     console.error('❌ Error verificando token:', error);
     res.status(401).json({
       success: false,
-      error: 'Token inválido'
+      error: 'Token inválido o expirado'
     });
   }
 });
 
 /* ================================================================
-   PUT /api/auth/update-profile - Actualizar perfil del usuario
-   ================================================================ */
+   PUT /api/auth/update-profile
+================================================================ */
 router.put('/update-profile', authenticateToken, async (req, res) => {
   try {
     const { username, currentPassword, newPassword } = req.body;
@@ -147,9 +144,9 @@ router.put('/update-profile', authenticateToken, async (req, res) => {
       });
     }
 
-    // Obtener usuario
+    // Obtener usuario actual
     const user = await getQuery(
-      'SELECT * FROM users WHERE id = ? AND is_active = true',
+      'SELECT * FROM users WHERE id = $1 AND is_active = TRUE',
       [userId]
     );
 
@@ -161,32 +158,35 @@ router.put('/update-profile', authenticateToken, async (req, res) => {
     }
 
     // Verificar duplicado
-    const duplicateUser = await getQuery(
-      'SELECT id FROM users WHERE username = ? AND id != ? AND is_active = true',
+    const duplicate = await getQuery(
+      'SELECT id FROM users WHERE username = $1 AND id != $2 AND is_active = TRUE',
       [username, userId]
     );
 
-    if (duplicateUser) {
+    if (duplicate) {
       return res.status(400).json({
         success: false,
         error: 'Ya existe otro usuario con este nombre'
       });
     }
 
-    let updateQuery = 'UPDATE users SET username = ?, updated_at = NOW()';
-    let params = [username];
+    /* ---------- ARMAR UPDATE DINÁMICO ---------- */
+
+    let updateQuery = `UPDATE users SET username = $1, updated_at = NOW()`;
+    const params = [username];
+    let paramIndex = 2;
 
     // Cambio de contraseña
     if (newPassword && newPassword.trim() !== '') {
       if (!currentPassword) {
         return res.status(400).json({
           success: false,
-          error: 'La contraseña actual es requerida para cambiar la contraseña'
+          error: 'Debe ingresar la contraseña actual'
         });
       }
 
-      const isValid = await bcrypt.compare(currentPassword, user.password);
-      if (!isValid) {
+      const match = await bcrypt.compare(currentPassword, user.password);
+      if (!match) {
         return res.status(400).json({
           success: false,
           error: 'La contraseña actual es incorrecta'
@@ -201,23 +201,25 @@ router.put('/update-profile', authenticateToken, async (req, res) => {
       }
 
       const hashed = await bcrypt.hash(newPassword, 10);
-      updateQuery += ', password = ?';
+
+      updateQuery += `, password = $${paramIndex}`;
       params.push(hashed);
+      paramIndex++;
     }
 
-    updateQuery += ' WHERE id = ?';
+    updateQuery += ` WHERE id = $${paramIndex}`;
     params.push(userId);
 
     await runQuery(updateQuery, params);
 
     const updated = await getQuery(
-      'SELECT id, username, role, created_at, updated_at FROM users WHERE id = ?',
+      'SELECT id, username, role, created_at, updated_at FROM users WHERE id = $1',
       [userId]
     );
 
     res.json({
       success: true,
-      message: 'Perfil actualizado exitosamente',
+      message: 'Perfil actualizado correctamente',
       data: updated
     });
 
@@ -225,7 +227,7 @@ router.put('/update-profile', authenticateToken, async (req, res) => {
     console.error('❌ Error actualizando perfil:', error);
     res.status(500).json({
       success: false,
-      error: 'Error al actualizar perfil: ' + error.message
+      error: 'Error al actualizar perfil'
     });
   }
 });

@@ -6,7 +6,7 @@ const router = express.Router();
 
 /* ================================================================
    GET /api/reports/daily - Reporte diario
-   ================================================================ */
+================================================================ */
 router.get('/daily', authenticateToken, async (req, res) => {
   try {
     const { date } = req.query;
@@ -15,10 +15,10 @@ router.get('/daily', authenticateToken, async (req, res) => {
     const records = await allQuery(
       `
       SELECT 
-        e.id as employee_id,
-        e.name as employee_name,
+        e.id AS employee_id,
+        e.name AS employee_name,
         e.dni,
-        e.type as employee_type,
+        e.type AS employee_type,
         e.photo,
         a.entry_time,
         a.exit_time,
@@ -30,10 +30,12 @@ router.get('/daily', authenticateToken, async (req, res) => {
           WHEN a.entry_time IS NOT NULL AND a.exit_time IS NULL THEN 'En trabajo'
           WHEN a.entry_time IS NOT NULL AND a.exit_time IS NOT NULL THEN 'Completado'
           ELSE 'No registrado'
-        END as status
+        END AS status
       FROM employees e
-      LEFT JOIN attendance a ON e.id = a.employee_id AND a.date = ?
-      WHERE e.is_active = true
+      LEFT JOIN attendance a 
+        ON e.id = a.employee_id 
+       AND a.date = $1
+      WHERE e.is_active = TRUE
       ORDER BY e.type, e.name
       `,
       [reportDate]
@@ -53,8 +55,8 @@ router.get('/daily', authenticateToken, async (req, res) => {
 });
 
 /* ================================================================
-   GET /api/reports/weekly - Reporte semanal (ÚNICA VERSIÓN CORRECTA)
-   ================================================================ */
+   GET /api/reports/weekly - Reporte semanal completo
+================================================================ */
 router.get('/weekly', authenticateToken, async (req, res) => {
   try {
     const { start_date, end_date } = req.query;
@@ -66,117 +68,123 @@ router.get('/weekly', authenticateToken, async (req, res) => {
       });
     }
 
-    // --- CONSULTAS BASE ---
+    // --- CONSULTA PRODUCCIÓN ---
     const productionQuery = `
       SELECT 
-        e.id as employee_id,
-        e.name as employee,
+        e.id AS employee_id,
+        e.name AS employee,
         e.dni,
-        COUNT(a.id) as dias_trabajados,
-        SUM(COALESCE(a.despalillo, 0)) as total_despalillo,
-        SUM(COALESCE(a.escogida, 0)) as total_escogida,
-        SUM(COALESCE(a.monado, 0)) as total_monado,
-        SUM(COALESCE(a.t_despalillo, 0)) as t_despalillo,
-        SUM(COALESCE(a.t_escogida, 0)) as t_escogida,
-        SUM(COALESCE(a.t_monado, 0)) as t_monado,
-        SUM(COALESCE(a.prop_sabado, 0)) as prop_sabado,
-        SUM(COALESCE(a.septimo_dia, 0)) as septimo_dia
+        COUNT(a.id) AS dias_trabajados,
+        SUM(COALESCE(a.despalillo, 0)) AS total_despalillo,
+        SUM(COALESCE(a.escogida, 0)) AS total_escogida,
+        SUM(COALESCE(a.monado, 0)) AS total_monado,
+        SUM(COALESCE(a.t_despalillo, 0)) AS t_despalillo,
+        SUM(COALESCE(a.t_escogida, 0)) AS t_escogida,
+        SUM(COALESCE(a.t_monado, 0)) AS t_monado,
+        SUM(COALESCE(a.prop_sabado, 0)) AS prop_sabado,
+        SUM(COALESCE(a.septimo_dia, 0)) AS septimo_dia
       FROM employees e
       INNER JOIN attendance a ON e.id = a.employee_id 
-      WHERE e.type = 'Producción' 
-        AND e.is_active = true
-        AND a.date BETWEEN ? AND ?
+      WHERE e.type = 'Producción'
+        AND e.is_active = TRUE
+        AND a.date BETWEEN $1 AND $2
         AND a.exit_time IS NOT NULL
       GROUP BY e.id
       HAVING COUNT(a.id) > 0
     `;
 
+    // --- CONSULTA AL DÍA ---
     const alDiaQuery = `
       SELECT 
-        e.id as employee_id,
-        e.name as employee,
+        e.id AS employee_id,
+        e.name AS employee,
         e.dni,
         e.monthly_salary,
-        COUNT(a.id) as dias_trabajados,
-        SUM(COALESCE(a.hours_extra, 0)) as horas_extras,
-        SUM(COALESCE(a.prop_sabado, 0)) as sabado,
-        SUM(COALESCE(a.septimo_dia, 0)) as septimo_dia
+        COUNT(a.id) AS dias_trabajados,
+        SUM(COALESCE(a.hours_extra, 0)) AS horas_extras,
+        SUM(COALESCE(a.prop_sabado, 0)) AS sabado,
+        SUM(COALESCE(a.septimo_dia, 0)) AS septimo_dia
       FROM employees e
       INNER JOIN attendance a ON e.id = a.employee_id 
-      WHERE e.type = 'Al Dia' 
-        AND e.is_active = true
-        AND a.date BETWEEN ? AND ?
+      WHERE e.type = 'Al Dia'
+        AND e.is_active = TRUE
+        AND a.date BETWEEN $1 AND $2
         AND a.exit_time IS NOT NULL
       GROUP BY e.id
       HAVING COUNT(a.id) > 0
     `;
 
-    // --- EJECUCIÓN EN PARALELO ---
+    // Ejecutar ambas consultas
     const [productionRows, alDiaRows] = await Promise.all([
       allQuery(productionQuery, [start_date, end_date]),
       allQuery(alDiaQuery, [start_date, end_date])
     ]);
 
-    // --- CÁLCULOS PARA PRODUCCIÓN ---
-    const productionWithCalculations = productionRows.map(row => {
-      const total_produccion =
+    /* ================================================================
+       CÁLCULOS PRODUCCIÓN
+    ================================================================ */
+    const productionWithTotals = productionRows.map(row => {
+      const totalProd =
         (row.t_despalillo || 0) +
         (row.t_escogida || 0) +
         (row.t_monado || 0);
 
-      const prop_sabado = total_produccion * 0.090909;
-      const neto_pagar =
-        total_produccion + prop_sabado + (row.septimo_dia || 0);
+      const propSabado = totalProd * 0.090909;
+      const neto = totalProd + propSabado + (row.septimo_dia || 0);
 
       return {
         ...row,
-        total_produccion: Math.round(total_produccion * 100) / 100,
-        prop_sabado: Math.round(prop_sabado * 100) / 100,
-        neto_pagar: Math.round(neto_pagar * 100) / 100
+        total_produccion: Number(totalProd.toFixed(2)),
+        prop_sabado: Number(propSabado.toFixed(2)),
+        neto_pagar: Number(neto.toFixed(2))
       };
     });
 
-    // --- CÁLCULOS PARA AL DÍA ---
-    const alDiaWithCalculations = alDiaRows.map(row => {
+    /* ================================================================
+       CÁLCULOS AL DÍA
+    ================================================================ */
+    const alDiaWithTotals = alDiaRows.map(row => {
       const salario_diario = (row.monthly_salary || 0) / 30;
-      const valorHoraNormal = salario_diario / 8;
-      const valorHoraExtra = valorHoraNormal * 1.25;
+      const valorHora = salario_diario / 8;
+      const valorHE = valorHora * 1.25;
 
-      const he_dinero = (row.horas_extras || 0) * valorHoraExtra;
+      const heDinero = valorHE * (row.horas_extras || 0);
 
-      const neto_pagar =
+      const neto =
         (row.dias_trabajados * salario_diario) +
-        he_dinero +
+        heDinero +
         (row.sabado || 0) +
         (row.septimo_dia || 0);
 
       return {
         ...row,
-        salario_diario: Math.round(salario_diario * 100) / 100,
-        he_dinero: Math.round(he_dinero * 100) / 100,
-        sabado: Math.round((row.sabado || 0) * 100) / 100,
-        septimo_dia: Math.round((row.septimo_dia || 0) * 100) / 100,
-        neto_pagar: Math.round(neto_pagar * 100) / 100
+        salario_diario: Number(salario_diario.toFixed(2)),
+        he_dinero: Number(heDinero.toFixed(2)),
+        sabado: Number(row.sabado || 0),
+        septimo_dia: Number(row.septimo_dia || 0),
+        neto_pagar: Number(neto.toFixed(2))
       };
     });
 
-    // --- SUMATORIAS FINALES ---
-    const totalProduction = productionWithCalculations.reduce((t, r) => t + r.neto_pagar, 0);
-    const totalAlDia = alDiaWithCalculations.reduce((t, r) => t + r.neto_pagar, 0);
+    /* ================================================================
+       SUMATORIAS
+    ================================================================ */
+    const totalProduction = productionWithTotals.reduce((acc, r) => acc + r.neto_pagar, 0);
+    const totalAlDia = alDiaWithTotals.reduce((acc, r) => acc + r.neto_pagar, 0);
 
     res.json({
       success: true,
       data: {
-        production: productionWithCalculations,
-        alDia: alDiaWithCalculations
+        production: productionWithTotals,
+        alDia: alDiaWithTotals
       },
       summary: {
-        total_employees: productionWithCalculations.length + alDiaWithCalculations.length,
-        total_production_employees: productionWithCalculations.length,
-        total_aldia_employees: alDiaWithCalculations.length,
-        total_payroll: totalProduction + totalAlDia,
-        total_production_payroll: totalProduction,
-        total_aldia_payroll: totalAlDia,
+        total_employees: productionWithTotals.length + alDiaWithTotals.length,
+        total_production_employees: productionWithTotals.length,
+        total_aldia_employees: alDiaWithTotals.length,
+        total_payroll: Number((totalProduction + totalAlDia).toFixed(2)),
+        total_production_payroll: Number(totalProduction.toFixed(2)),
+        total_aldia_payroll: Number(totalAlDia.toFixed(2)),
         period: { start_date, end_date }
       }
     });
