@@ -68,8 +68,8 @@ router.post('/', authenticateToken, requireAdminOrScanner, upload.single('photo'
     const insert = await runQuery(
       `INSERT INTO employees (name, dni, type, monthly_salary, photo)
        VALUES ($1, $2, $3, $4, $5)
-       RETURNING id`,
-      [name, dni, type, monthly_salary || 0, photoUrl]
+       RETURNING id, photo`,
+      [name, dni, type, monthly_salary, photoUrl]
     );
 
     const employeeId = insert[0].id;
