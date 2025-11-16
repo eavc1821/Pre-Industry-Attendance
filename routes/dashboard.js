@@ -35,14 +35,15 @@ router.get('/stats', authenticateToken, async (req, res) => {
         SELECT 
           COUNT(DISTINCT employee_id) as employees_this_week,
           SUM(
-            CASE 
-              WHEN exit_time IS NOT NULL THEN 
-                (julianday(exit_time) - julianday(entry_time)) * 24
-              ELSE 0 
-            END
-          ) as total_hours
+              CASE 
+                WHEN exit_time IS NOT NULL THEN 
+                  EXTRACT(EPOCH FROM (exit_time - entry_time)) / 3600
+                ELSE 0
+              END
+            ) AS total_hours
         FROM attendance 
-        WHERE date BETWEEN date('now', '-7 days') AND ?
+        WHERE date BETWEEN (CURRENT_DATE - INTERVAL '7 days') AND CURRENT_DATE
+
       `, [today]),
       
       // Actividad reciente (últimos 5 registros)

@@ -12,13 +12,17 @@ router.delete(
     try {
       console.log('🧹 Iniciando reset de base de datos...');
 
+      // Eliminar registros
       await runQuery('DELETE FROM attendance');
       await runQuery('DELETE FROM employees');
-      await runQuery('DELETE FROM sqlite_sequence WHERE name IN ("employees", "attendance")');
+
+      // Reiniciar autoincrementos (PostgreSQL)
+      await runQuery('ALTER SEQUENCE employees_id_seq RESTART WITH 1');
+      await runQuery('ALTER SEQUENCE attendance_id_seq RESTART WITH 1');
 
       res.json({
         success: true,
-        message: 'Base de datos reseteada exitosamente. Usuarios mantienen intactos.'
+        message: 'Base de datos reseteada exitosamente (PostgreSQL). Usuarios intactos.'
       });
 
     } catch (error) {
@@ -30,5 +34,6 @@ router.delete(
     }
   }
 );
+
 
 module.exports = router;
