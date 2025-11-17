@@ -11,7 +11,7 @@ const upload = require("../config/multerCloudinary");
 ================================================== */
 router.get("/", authenticateToken, async (req, res) => {
   try {
-    const employees = await runQuery(`
+    const employees = await allQuery(`
       SELECT 
         id,
         dni,
