@@ -58,14 +58,18 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
       }
     }
 
-    const entryTimestamp = new Date().toISOString();
+    const now = new Date();
 
-      const result = await runQuery(
-        `INSERT INTO attendance (employee_id, date, entry_time, created_at)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id`,
-        [employee_id, today, entryTimestamp, entryTimestamp]
-      );
+    const entryTimestamp = now.toISOString();              // TIMESTAMP
+    const entryTimeOnly = entryTimestamp.substring(11, 19); // TIME HH:MM:SS
+
+    const result = await runQuery(
+      `INSERT INTO attendance (employee_id, date, entry_time, created_at)
+      VALUES ($1, $2, $3, $4)
+      RETURNING id`,
+      [employee_id, today, entryTimeOnly, entryTimestamp]
+    );
+
 
       console.log("🟦 RESULTADO INSERT:", result);
 
