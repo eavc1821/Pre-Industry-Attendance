@@ -29,7 +29,6 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // PostgreSQL: usar $1
     const user = await getQuery(
       'SELECT * FROM users WHERE username = $1 AND is_active = TRUE',
       [username]
@@ -42,7 +41,6 @@ router.post('/login', async (req, res) => {
       });
     }
 
-    // Comparar contraseña
     const isValid = await bcrypt.compare(password, user.password);
     if (!isValid) {
       return res.status(401).json({
@@ -90,11 +88,29 @@ router.post('/verify', async (req, res) => {
     if (!token) {
       return res.status(401).json({
         success: false,
-        error: 'Token no proporcionado'
+        error: 'jwt malformed'  // Permite al frontend manejarlo correctamente
       });
     }
 
-    const decoded = jwt.verify(token, JWT_SECRET);
+    let decoded;
+
+    try {
+      decoded = jwt.verify(token, JWT_SECRET);
+    } catch (error) {
+      console.error('❌ Error verificando token:', error);
+
+      if (error.name === "TokenExpiredError") {
+        return res.status(401).json({
+          success: false,
+          error: 'jwt expired'
+        });
+      }
+
+      return res.status(401).json({
+        success: false,
+        error: 'jwt malformed'
+      });
+    }
 
     const user = await getQuery(
       'SELECT id, username, role FROM users WHERE id = $1 AND is_active = TRUE',
@@ -104,7 +120,7 @@ router.post('/verify', async (req, res) => {
     if (!user) {
       return res.status(401).json({
         success: false,
-        error: 'Usuario no encontrado'
+        error: 'jwt malformed'
       });
     }
 
@@ -117,7 +133,7 @@ router.post('/verify', async (req, res) => {
     console.error('❌ Error verificando token:', error);
     res.status(401).json({
       success: false,
-      error: 'Token inválido o expirado'
+      error: 'jwt malformed'
     });
   }
 });
@@ -144,7 +160,6 @@ router.put('/update-profile', authenticateToken, async (req, res) => {
       });
     }
 
-    // Obtener usuario actual
     const user = await getQuery(
       'SELECT * FROM users WHERE id = $1 AND is_active = TRUE',
       [userId]
@@ -157,7 +172,6 @@ router.put('/update-profile', authenticateToken, async (req, res) => {
       });
     }
 
-    // Verificar duplicado
     const duplicate = await getQuery(
       'SELECT id FROM users WHERE username = $1 AND id != $2 AND is_active = TRUE',
       [username, userId]
@@ -170,13 +184,10 @@ router.put('/update-profile', authenticateToken, async (req, res) => {
       });
     }
 
-    /* ---------- ARMAR UPDATE DINÁMICO ---------- */
-
     let updateQuery = `UPDATE users SET username = $1, updated_at = NOW()`;
     const params = [username];
     let paramIndex = 2;
 
-    // Cambio de contraseña
     if (newPassword && newPassword.trim() !== '') {
       if (!currentPassword) {
         return res.status(400).json({

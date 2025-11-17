@@ -6,9 +6,9 @@ const { authenticateToken, requireAdminOrScanner } = require("../middleware/auth
 const cloudinary = require("../config/cloudinary");
 const upload = require("../config/multerCloudinary");
 
-// ==================================================
-// GET ALL EMPLOYEES
-// ==================================================
+/* ==================================================
+   GET ALL EMPLOYEES
+================================================== */
 router.get("/", authenticateToken, async (req, res) => {
   try {
     const employees = await runQuery(`
@@ -33,14 +33,13 @@ router.get("/", authenticateToken, async (req, res) => {
   }
 });
 
-// ==================================================
-// CREATE EMPLOYEE + AUTO QR
-// ==================================================
+/* ==================================================
+   CREATE EMPLOYEE + AUTO QR
+================================================== */
 router.post("/", authenticateToken, requireAdminOrScanner, upload.single("photo"), async (req, res) => {
   try {
     const { dni, name, type, monthly_salary } = req.body;
 
-    // VALIDACIONES
     if (!dni || dni.length !== 13) {
       return res.status(400).json({ success: false, error: "DNI inválido (13 dígitos)" });
     }
@@ -54,34 +53,28 @@ router.post("/", authenticateToken, requireAdminOrScanner, upload.single("photo"
       return res.status(400).json({ success: false, error: "Ya existe un empleado con este DNI" });
     }
 
-    // FOTO OPCIONAL
-    let photoUrl = null;
-
-    // CloudinaryStorage guarda la foto automáticamente
-      if (req.file) {
-        photoUrl = req.file.path;  
-      }
+    // FOTO OPCIONAL — 🔥 CORREGIDO: usar req.file.path
+    let photoUrl = req.file?.path || null;
 
     // INSERTAR EMPLEADO
-    const created = await runQuery(
+    const newEmployee = await runQuery(
       `INSERT INTO employees (dni, name, type, monthly_salary, photo, is_active)
        VALUES ($1, $2, $3, $4, $5, TRUE)
        RETURNING id`,
       [dni, name, type, monthly_salary || 0, photoUrl]
     );
 
-    const employeeId = created.id;
+    const employeeId = newEmployee.id;
 
     // GENERAR QR AUTOMÁTICAMENTE
     const qrBuffer = qr.imageSync(employeeId.toString(), { type: "png" });
 
     const uploadQR = () =>
       new Promise((resolve, reject) => {
-        const stream = cloudinary.uploader.upload_stream(
+        cloudinary.uploader.upload_stream(
           { folder: "attendance-qrs", format: "png" },
           (err, result) => (err ? reject(err) : resolve(result))
-        );
-        stream.end(qrBuffer);
+        ).end(qrBuffer);
       });
 
     const qrUploaded = await uploadQR();
@@ -104,9 +97,9 @@ router.post("/", authenticateToken, requireAdminOrScanner, upload.single("photo"
   }
 });
 
-// ==================================================
-// UPDATE EMPLOYEE (Regenera QR si cambia el DNI)
-// ==================================================
+/* ==================================================
+   UPDATE EMPLOYEE
+================================================== */
 router.put("/:id", authenticateToken, requireAdminOrScanner, upload.single("photo"), async (req, res) => {
   try {
     const employeeId = req.params.id;
@@ -121,34 +114,24 @@ router.put("/:id", authenticateToken, requireAdminOrScanner, upload.single("phot
       return res.status(404).json({ success: false, error: "Empleado no encontrado" });
     }
 
-    let newPhoto = existing.photo;
+    let updatedPhoto = existing.photo;
 
-    // FOTO NUEVA
-    if (req.file && req.file.buffer && req.file.size > 0) {
-      try {
-        const uploadPhoto = () =>
-          new Promise((resolve, reject) => {
-            const stream = cloudinary.uploader.upload_stream(
-              { folder: "attendance-photos" },
-              (err, result) => (err ? reject(err) : resolve(result))
-            );
-            stream.end(req.file.buffer);
-          });
-
-        const uploadedPhoto = await uploadPhoto();
-        newPhoto = uploadedPhoto.secure_url;
-      } catch (err) {
-        console.log("⚠️ Error subiendo foto:", err);
-      }
+    /* --------------------------
+       FOTO NUEVA — 🔥 CORREGIDO
+    --------------------------- */
+    if (req.file?.path) {
+      updatedPhoto = req.file.path;
     }
 
-    // ELIMINAR FOTO
+    /* --------------------------
+       ELIMINAR FOTO
+    --------------------------- */
     if (remove_photo === "true" && existing.photo) {
       try {
         const publicId = existing.photo.split("/").slice(-1)[0].split(".")[0];
         await cloudinary.uploader.destroy(`attendance-photos/${publicId}`);
       } catch (err) {}
-      newPhoto = null;
+      updatedPhoto = null;
     }
 
     // ACTUALIZAR EMPLEADO
@@ -156,20 +139,21 @@ router.put("/:id", authenticateToken, requireAdminOrScanner, upload.single("phot
       `UPDATE employees
        SET dni=$1, name=$2, type=$3, monthly_salary=$4, photo=$5
        WHERE id=$6`,
-      [dni, name, type, monthly_salary || 0, newPhoto, employeeId]
+      [dni, name, type, monthly_salary || 0, updatedPhoto, employeeId]
     );
 
-    // REGENERAR QR SOLO SI CAMBIÓ EL DNI
+    /* -----------------------------------------
+       REGENERAR QR SOLO SI CAMBIÓ EL DNI
+    ------------------------------------------ */
     if (dni !== existing.dni) {
       const qrBuffer = qr.imageSync(employeeId.toString(), { type: "png" });
 
       const uploadQR = () =>
         new Promise((resolve, reject) => {
-          const stream = cloudinary.uploader.upload_stream(
+          cloudinary.uploader.upload_stream(
             { folder: "attendance-qrs", format: "png" },
             (err, result) => (err ? reject(err) : resolve(result))
-          );
-          stream.end(qrBuffer);
+          ).end(qrBuffer);
         });
 
       const qrUploaded = await uploadQR();
@@ -188,9 +172,9 @@ router.put("/:id", authenticateToken, requireAdminOrScanner, upload.single("phot
   }
 });
 
-// ==================================================
-// SOFT DELETE EMPLOYEE
-// ==================================================
+/* ==================================================
+   DELETE (SOFT DELETE)
+================================================== */
 router.delete("/:id", authenticateToken, requireAdminOrScanner, async (req, res) => {
   try {
     const employeeId = req.params.id;
@@ -208,11 +192,9 @@ router.delete("/:id", authenticateToken, requireAdminOrScanner, async (req, res)
   }
 });
 
-
-
-/* ================================================================
-   GET /employees/:id/stats - Estadísticas (POSTGRES)
-================================================================ */
+/* ==================================================
+   STATS POR EMPLEADO
+================================================== */
 router.get('/:id/stats', authenticateToken, async (req, res) => {
   try {
     const employeeId = req.params.id;
@@ -268,7 +250,6 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
     }
 
     /* --- AL DÍA --- */
-
     const stats = await getQuery(
       `
       SELECT 
@@ -289,7 +270,11 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
     const heDinero = stats.horas_extras * valorHE;
     const sabado = salarioDiario;
     const septimoDia = stats.dias_trabajados >= 5 ? salarioDiario : 0;
-    const neto = (stats.dias_trabajados * salarioDiario) + heDinero + sabado + septimoDia;
+    const neto =
+      stats.dias_trabajados * salarioDiario +
+      heDinero +
+      sabado +
+      septimoDia;
 
     res.json({
       success: true,

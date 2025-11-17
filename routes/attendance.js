@@ -27,7 +27,6 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
       });
     }
 
-    // Verificar si el empleado existe
     const employee = await getQuery(
       'SELECT id, name, type FROM employees WHERE id = $1 AND is_active = TRUE',
       [employee_id]
@@ -40,7 +39,6 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
       });
     }
 
-    // Verificar si ya existe entrada hoy
     const existingRecord = await getQuery(
       'SELECT id, exit_time FROM attendance WHERE employee_id = $1 AND date = $2',
       [employee_id, today]
@@ -62,7 +60,6 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
 
     const entryTimestamp = new Date().toISOString();
 
-    // PostgreSQL necesita RETURNING id para obtener el id insertado
     const result = await runQuery(
       `INSERT INTO attendance (employee_id, date, entry_time, created_at)
        VALUES ($1, $2, $3, $3)
@@ -118,7 +115,6 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
       return res.status(400).json({ success: false, error: 'Empleado está inactivo' });
     }
 
-    // Verificar entrada activa
     const attendanceRecord = await getQuery(
       `SELECT a.*, e.name, e.type 
        FROM attendance a 
@@ -134,13 +130,11 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
       });
     }
 
-    // Convertir números
     const hoursExtraNum = parseFloat(hours_extra) || 0;
     const despalilloNum = parseFloat(despalillo) || 0;
     const escogidaNum = parseFloat(escogida) || 0;
     const monadoNum = parseFloat(monado) || 0;
 
-    // Cálculos producción
     let t_despalillo = 0,
         t_escogida = 0,
         t_monado = 0,
@@ -227,7 +221,7 @@ router.get('/today', authenticateToken, async (req, res) => {
   try {
     const today = getLocalDate();
 
-    const records = await allQuery(
+    let records = await allQuery(
       `
       SELECT 
         a.*,
@@ -247,7 +241,16 @@ router.get('/today', authenticateToken, async (req, res) => {
       [today]
     );
 
-    const processed = records.map(r => ({
+    // ----------------------------
+    // PATCH: Asegurar que records siempre sea array
+    // ----------------------------
+    const safeRecords = Array.isArray(records)
+      ? records
+      : records
+      ? [records]
+      : [];
+
+    const processed = safeRecords.map(r => ({
       ...r,
       entry_time_display: r.entry_time,
       exit_time_display: r.exit_time || '-',
