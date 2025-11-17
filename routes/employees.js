@@ -202,9 +202,11 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
   try {
     const employeeId = req.params.id;
 
+    // 1. Validar empleado
     const employee = await getQuery(
       `SELECT id, name, type, monthly_salary 
-       FROM employees WHERE id = $1 AND is_active = TRUE`,
+       FROM employees 
+       WHERE id = $1 AND is_active = TRUE`,
       [employeeId]
     );
 
@@ -215,6 +217,9 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
     const year = new Date().getFullYear();
     const month = new Date().getMonth() + 1;
 
+    /* ======================================================
+       ESTADÍSTICAS PARA EMPLEADOS DE PRODUCCIÓN
+    ====================================================== */
     if (employee.type === "Producción") {
 
       const stats = await getQuery(
@@ -237,14 +242,28 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
         [employeeId, year, month]
       );
 
-      const total = stats.t_despalillo + stats.t_escogida + stats.t_monado;
+      // Convertir todo a número seguro
+      const diasTrab = Number(stats.dias_trabajados) || 0;
+      const tDespalillo = Number(stats.t_despalillo) || 0;
+      const tEscogida   = Number(stats.t_escogida) || 0;
+      const tMonado     = Number(stats.t_monado) || 0;
+      const septimoDia  = Number(stats.septimo_dia) || 0;
+
+      const total = tDespalillo + tEscogida + tMonado;
       const propSabado = total * 0.090909;
-      const neto = total + propSabado + stats.septimo_dia;
+      const neto = total + propSabado + septimoDia;
 
       return res.json({
         success: true,
         data: {
-          ...stats,
+          dias_trabajados: diasTrab,
+          total_despalillo: tDespalillo,
+          total_escogida: tEscogida,
+          total_monado: tMonado,
+          t_despalillo: tDespalillo,
+          t_escogida: tEscogida,
+          t_monado: tMonado,
+          septimo_dia: septimoDia,
           prop_sabado: Number(propSabado.toFixed(2)),
           neto_pagar: Number(neto.toFixed(2)),
           type: "Producción"
@@ -252,7 +271,10 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
       });
     }
 
-    /* --- AL DÍA --- */
+    /* ======================================================
+       ESTADÍSTICAS PARA EMPLEADOS AL DÍA
+    ====================================================== */
+
     const stats = await getQuery(
       `
       SELECT 
@@ -267,14 +289,22 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
       [employeeId, year, month]
     );
 
-    const salarioDiario = employee.monthly_salary / 30;
+    // Convertir a números seguros
+    const diasTrab = Number(stats.dias_trabajados) || 0;
+    const horasExtras = Number(stats.horas_extras) || 0;
+
+    const salarioMensual = Number(employee.monthly_salary) || 0;
+    const salarioDiario = salarioMensual / 30;
+
     const valorHoraNormal = salarioDiario / 8;
     const valorHE = valorHoraNormal * 1.25;
-    const heDinero = stats.horas_extras * valorHE;
+
+    const heDinero = horasExtras * valorHE;
     const sabado = salarioDiario;
-    const septimoDia = stats.dias_trabajados >= 5 ? salarioDiario : 0;
+    const septimoDia = diasTrab >= 5 ? salarioDiario : 0;
+
     const neto =
-      stats.dias_trabajados * salarioDiario +
+      diasTrab * salarioDiario +
       heDinero +
       sabado +
       septimoDia;
@@ -282,14 +312,14 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
     res.json({
       success: true,
       data: {
-        dias_trabajados: stats.dias_trabajados,
-        horas_extras: stats.horas_extras,
+        dias_trabajados: diasTrab,
+        horas_extras: horasExtras,
         he_dinero: Number(heDinero.toFixed(2)),
         salario_diario: Number(salarioDiario.toFixed(2)),
         sabado: Number(sabado.toFixed(2)),
         septimo_dia: Number(septimoDia.toFixed(2)),
         neto_pagar: Number(neto.toFixed(2)),
-        type: "Al Dia"
+        type: "Al Día"
       }
     });
 
@@ -298,5 +328,6 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false, error: "Error obteniendo estadísticas" });
   }
 });
+
 
 module.exports = router;
