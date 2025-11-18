@@ -13,227 +13,353 @@ const round2 = (v) => Number(Number(v || 0).toFixed(2));
 /* ============================================================
    📌 WEEKLY REPORT — SUPER ADMIN ONLY
 ============================================================ */
-router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => {
+router.get('/weekly', authenticateToken, async (req, res) => {
   try {
-    const { start, end } = req.query;
+    const { start_date, end_date } = req.query;
 
-    if (!start || !end) {
+    if (!start_date || !end_date) {
       return res.status(400).json({
         success: false,
-        error: "start and end dates are required in YYYY-MM-DD format."
+        error: "start_date y end_date son requeridos"
       });
     }
 
-    /* ============================================================
-       Load all rows with exit_time (required for accurate attendance)
-    ============================================================= */
+    // 1. Obtener datos de empleados + asistencia semanal
     const rows = await allQuery(
       `
       SELECT 
-        a.id,
         a.employee_id,
         e.name AS employee,
+        e.dni,
         e.type AS employee_type,
         e.monthly_salary,
         a.date,
-        a.hours_extra,
-        a.t_despalillo,
-        a.t_escogida,
-        a.t_monado,
-        a.prop_sabado,
-        a.septimo_dia,
-        a.exit_time
+
+        -- Producción
+        COALESCE(a.despalillo, 0) AS despalillo,
+        COALESCE(a.escogida, 0) AS escogida,
+        COALESCE(a.monado, 0) AS monado,
+
+        -- Al Día
+        COALESCE(a.hours_extra, 0) AS hours_extra
+
       FROM attendance a
-      JOIN employees e ON e.id = a.employee_id
-      WHERE a.date >= $1 AND a.date <= $2
-      ORDER BY e.name ASC, a.date ASC
+      JOIN employees e ON a.employee_id = e.id
+      WHERE a.date BETWEEN $1 AND $2
+        AND a.exit_time IS NOT NULL
+      ORDER BY e.name ASC
       `,
-      [start, end]
+      [start_date, end_date]
     );
 
-    if (!rows.length) {
-      return res.json({
-        success: true,
-        data: { production: [], alDia: [], summary: {
-          total_employees: 0,
-          total_payroll: 0,
-          total_production_employees: 0,
-          total_aldia_employees: 0
-        }}
-      });
+    // Acumuladores por empleado
+    const employees = {};
+
+    for (const row of rows) {
+      const id = row.employee_id;
+
+      if (!employees[id]) {
+        employees[id] = {
+          employee_id: id,
+          employee: row.employee,
+          dni: row.dni,
+          employee_type: row.employee_type,
+          monthly_salary: row.monthly_salary,
+
+          // Producción
+          total_despalillo: 0,
+          total_escogida: 0,
+          total_monado: 0,
+
+          // Al Día
+          days_worked: 0,
+          hours_extra: 0
+        };
+      }
+
+      if (row.employee_type === "Producción") {
+        employees[id].total_despalillo += Number(row.despalillo);
+        employees[id].total_escogida   += Number(row.escogida);
+        employees[id].total_monado     += Number(row.monado);
+        employees[id].days_worked++;
+      } else {
+        employees[id].hours_extra += Number(row.hours_extra);
+        employees[id].days_worked++;
+      }
     }
 
-    const productionMap = {};
-    const alDiaMap = {};
+    const productionEmployees = [];
+    const alDiaEmployees = [];
 
-    /* ============================================================
-       Group rows by employee
-    ============================================================= */
-    rows.forEach(row => {
-      const id = row.employee_id;
-      const type = (row.employee_type || "").trim().toLowerCase();
-      const worked = row.exit_time !== null && row.exit_time !== undefined;
+    // Procesar cálculos finales
+    for (const emp of Object.values(employees)) {
+      if (emp.employee_type === "Producción") {
 
-      /* ===== Production Employees ===== */
-      if (type === "producción" || type === "produccion") {
-        if (!productionMap[id]) {
-          productionMap[id] = {
-            employee_id: id,
-            employee: row.employee,
-            monthly_salary: toNum(row.monthly_salary),
-            days_worked: worked ? 1 : 0,
-            total_despalillo: toNum(row.t_despalillo),
-            total_escogida: toNum(row.t_escogida),
-            total_monado: toNum(row.t_monado),
-            saturday_bonus: toNum(row.prop_sabado),
-            seventh_day: toNum(row.septimo_dia)
-          };
-        } else {
-          productionMap[id].days_worked += worked ? 1 : 0;
-          productionMap[id].total_despalillo += toNum(row.t_despalillo);
-          productionMap[id].total_escogida += toNum(row.t_escogida);
-          productionMap[id].total_monado += toNum(row.t_monado);
-          productionMap[id].saturday_bonus += toNum(row.prop_sabado);
-          productionMap[id].seventh_day += toNum(row.septimo_dia);
-        }
+        const TDes = emp.total_despalillo * 80;
+        const TEsc = emp.total_escogida * 70;
+        const TMon = emp.total_monado   * 1;
+
+        const totalProd = TDes + TEsc + TMon;
+
+        const saturdayBonus = Number((totalProd * 0.090909).toFixed(2));
+        const seventhDay    = Number((totalProd * 0.181818).toFixed(2));
+
+        const netPay = Number((totalProd + saturdayBonus + seventhDay).toFixed(2));
+
+        productionEmployees.push({
+          employee_id: emp.employee_id,
+          employee: emp.employee,
+          dni: emp.dni,
+          type: "Producción",
+
+          total_despalillo: emp.total_despalillo,
+          total_escogida: emp.total_escogida,
+          total_monado: emp.total_monado,
+
+          production_money: totalProd,
+          saturday_bonus: saturdayBonus,
+          seventh_day: seventhDay,
+
+          net_pay: netPay
+        });
+
+      } else {
+
+        const dailySalary = emp.monthly_salary / 30;
+        const hourValue = dailySalary / 8;
+        const overtimeValue = hourValue + hourValue * 0.25;
+
+        const hoursMoney = Number((emp.hours_extra * overtimeValue).toFixed(2));
+
+        const saturday = dailySalary;
+        const seventh = emp.days_worked >= 5 ? dailySalary : 0;
+
+        const netPay = Number(
+          (emp.days_worked * dailySalary + hoursMoney + saturday + seventh).toFixed(2)
+        );
+
+        alDiaEmployees.push({
+          employee_id: emp.employee_id,
+          employee: emp.employee,
+          dni: emp.dni,
+          type: "Al Día",
+
+          daily_salary: Number(dailySalary.toFixed(2)),
+          days_worked: emp.days_worked,
+          hours_extra: emp.hours_extra,
+          hours_extra_money: hoursMoney,
+          seventh_day: Number(seventh.toFixed(2)),
+
+          net_pay: netPay
+        });
       }
+    }
 
-      /* ===== Al Día Employees ===== */
-      else {
-        if (!alDiaMap[id]) {
-          alDiaMap[id] = {
-            employee_id: id,
-            employee: row.employee,
-            monthly_salary: toNum(row.monthly_salary),
-            days_worked: worked ? 1 : 0,
-            hours_extra: toNum(row.hours_extra)
-          };
-        } else {
-          alDiaMap[id].days_worked += worked ? 1 : 0;
-          alDiaMap[id].hours_extra += toNum(row.hours_extra);
-        }
-      }
-    });
-
-    /* ============================================================
-       Process "Al Día" Payroll
-    ============================================================= */
-    const groupedAlDia = Object.values(alDiaMap).map(emp => {
-      const monthly = emp.monthly_salary;
-      const dailySalary = monthly / 30;
-      const days = emp.days_worked;
-      const extraHours = emp.hours_extra;
-
-      const extraHourRate = (dailySalary / 8) * 1.25;
-      const hours_extra_money = extraHours * extraHourRate;
-
-      const seventh_day = days >= 5 ? dailySalary : 0;
-
-      const baseSalary = days * dailySalary;
-      const net_pay = baseSalary + hours_extra_money + seventh_day;
-
-      return {
-        ...emp,
-        daily_salary: round2(dailySalary),
-        hours_extra: extraHours,
-        hours_extra_money: round2(hours_extra_money),
-        seventh_day: round2(seventh_day),
-        net_pay: round2(net_pay)
-      };
-    });
-
-    /* ============================================================
-       Process Production Payroll
-    ============================================================= */
-    const groupedProduction = Object.values(productionMap).map(emp => {
-      const production_total =
-        emp.total_despalillo +
-        emp.total_escogida +
-        emp.total_monado;
-
-      const net_pay = production_total + emp.saturday_bonus + emp.seventh_day;
-
-      return {
-        ...emp,
-        production_total: round2(production_total),
-        net_pay: round2(net_pay)
-      };
-    });
-
-    /* ============================================================
-       Summary
-    ============================================================= */
+    // RESUMEN
     const summary = {
-      total_employees: groupedProduction.length + groupedAlDia.length,
-      total_production_employees: groupedProduction.length,
-      total_aldia_employees: groupedAlDia.length,
-      total_production_payroll: round2(groupedProduction.reduce((s, e) => s + e.net_pay, 0)),
-      total_aldia_payroll: round2(groupedAlDia.reduce((s, e) => s + e.net_pay, 0))
+      total_employees: productionEmployees.length + alDiaEmployees.length,
+      total_production_employees: productionEmployees.length,
+      total_aldia_employees: alDiaEmployees.length,
+      total_production_payroll: productionEmployees.reduce((sum, e) => sum + e.net_pay, 0),
+      total_aldia_payroll: alDiaEmployees.reduce((sum, e) => sum + e.net_pay, 0)
     };
 
     summary.total_payroll =
-      round2(summary.total_production_payroll + summary.total_aldia_payroll);
+      summary.total_production_payroll + summary.total_aldia_payroll;
 
-    /* ============================================================
-       Return data
-    ============================================================= */
     return res.json({
       success: true,
       data: {
-        production: groupedProduction,
-        alDia: groupedAlDia,
+        production: productionEmployees,
+        alDia: alDiaEmployees,
         summary
       }
     });
 
   } catch (error) {
-    console.error("❌ Error generating weekly report:", error);
-    return res.status(500).json({
-      success: false,
-      error: error.message
-    });
+    console.error("❌ Error en weekly:", error);
+    res.status(500).json({ success: false, error: "Error generando reporte semanal" });
   }
 });
+
 
 /* ============================================================
    📌 MONTHLY REPORT — SUPER ADMIN ONLY
 ============================================================ */
-router.get("/monthly", authenticateToken, requireSuperAdmin, async (req, res) => {
+router.get('/monthly', authenticateToken, async (req, res) => {
   try {
     const { year, month } = req.query;
 
     if (!year || !month) {
       return res.status(400).json({
         success: false,
-        error: "year and month required."
+        error: "year y month son requeridos"
       });
     }
 
-    const start = `${year}-${month}-01`;
-    const end = `${year}-${month}-31`;
+    const yearNum = Number(year);
+    const monthNum = Number(month);
 
-    const rows = await getQuery(
+    // Rango mensual completo
+    const start = `${yearNum}-${monthNum.toString().padStart(2, '0')}-01`;
+    const end = `${yearNum}-${monthNum.toString().padStart(2, '0')}-31`;
+
+    // Obtener asistencia del mes
+    const rows = await allQuery(
       `
       SELECT 
-        a.*,
-        e.name AS employee_name,
+        a.employee_id,
+        e.name AS employee,
+        e.dni,
         e.type AS employee_type,
-        e.monthly_salary
+        e.monthly_salary,
+        a.date,
+
+        -- Producción
+        COALESCE(a.despalillo, 0) AS despalillo,
+        COALESCE(a.escogida, 0) AS escogida,
+        COALESCE(a.monado, 0) AS monado,
+
+        -- Al Día
+        COALESCE(a.hours_extra, 0) AS hours_extra
+
       FROM attendance a
-      JOIN employees e ON e.id = a.employee_id
+      JOIN employees e ON a.employee_id = e.id
       WHERE a.date BETWEEN $1 AND $2
-      ORDER BY e.name ASC, a.date ASC
+        AND a.exit_time IS NOT NULL
+      ORDER BY e.name ASC
       `,
       [start, end]
     );
 
-    return res.json({ success: true, data: rows });
+    const employees = {};
+
+    /* ========== ACUMULAR DATOS MENSUALES ========== */
+    for (const row of rows) {
+      const id = row.employee_id;
+
+      if (!employees[id]) {
+        employees[id] = {
+          employee_id: id,
+          employee: row.employee,
+          dni: row.dni,
+          employee_type: row.employee_type,
+          monthly_salary: row.monthly_salary,
+
+          total_despalillo: 0,
+          total_escogida: 0,
+          total_monado: 0,
+
+          days_worked: 0,
+          hours_extra: 0
+        };
+      }
+
+      if (row.employee_type === "Producción") {
+        employees[id].total_despalillo += Number(row.despalillo);
+        employees[id].total_escogida += Number(row.escogida);
+        employees[id].total_monado += Number(row.monado);
+        employees[id].days_worked++;
+      } else {
+        employees[id].hours_extra += Number(row.hours_extra);
+        employees[id].days_worked++;
+      }
+    }
+
+    const productionEmployees = [];
+    const alDiaEmployees = [];
+
+    /* ========== CALCULAR SALARIOS Y TOTALES ========== */
+    for (const emp of Object.values(employees)) {
+      if (emp.employee_type === "Producción") {
+
+        const TDes = emp.total_despalillo * 80;
+        const TEsc = emp.total_escogida * 70;
+        const TMon = emp.total_monado * 1;
+
+        const totalProd = TDes + TEsc + TMon;
+
+        const saturdayBonus = Number((totalProd * 0.090909).toFixed(2));
+        const seventhDay = Number((totalProd * 0.181818).toFixed(2));
+
+        const netPay = Number((totalProd + saturdayBonus + seventhDay).toFixed(2));
+
+        productionEmployees.push({
+          employee_id: emp.employee_id,
+          employee: emp.employee,
+          dni: emp.dni,
+          type: "Producción",
+
+          total_despalillo: emp.total_despalillo,
+          total_escogida: emp.total_escogida,
+          total_monado: emp.total_monado,
+
+          production_money: totalProd,
+          saturday_bonus: saturdayBonus,
+          seventh_day: seventhDay,
+
+          net_pay: netPay
+        });
+
+      } else {
+        // AL DÍA
+        const dailySalary = emp.monthly_salary / 30;
+        const hourValue = dailySalary / 8;
+        const overtimeValue = hourValue + hourValue * 0.25;
+
+        const overtimeMoney = Number((emp.hours_extra * overtimeValue).toFixed(2));
+
+        const saturday = dailySalary;
+        const seventh = emp.days_worked >= 5 ? dailySalary : 0;
+
+        const netPay = Number(
+          (emp.days_worked * dailySalary + overtimeMoney + saturday + seventh).toFixed(2)
+        );
+
+        alDiaEmployees.push({
+          employee_id: emp.employee_id,
+          employee: emp.employee,
+          dni: emp.dni,
+          type: "Al Día",
+
+          daily_salary: Number(dailySalary.toFixed(2)),
+          days_worked: emp.days_worked,
+          hours_extra: emp.hours_extra,
+          hours_extra_money: overtimeMoney,
+          seventh_day: Number(seventh.toFixed(2)),
+
+          net_pay: netPay
+        });
+      }
+    }
+
+    // RESUMEN MENSUAL
+    const summary = {
+      total_employees: productionEmployees.length + alDiaEmployees.length,
+      total_production_employees: productionEmployees.length,
+      total_aldia_employees: alDiaEmployees.length,
+      total_production_payroll: productionEmployees.reduce((s, e) => s + e.net_pay, 0),
+      total_aldia_payroll: alDiaEmployees.reduce((s, e) => s + e.net_pay, 0)
+    };
+
+    summary.total_payroll =
+      summary.total_production_payroll + summary.total_aldia_payroll;
+
+    return res.json({
+      success: true,
+      data: {
+        production: productionEmployees,
+        alDia: alDiaEmployees,
+        summary
+      }
+    });
 
   } catch (error) {
-    console.error("❌ Error generating monthly:", error);
-    return res.status(500).json({ success: false, error: error.message });
+    console.error("❌ Error en monthly:", error);
+    res.status(500).json({ success: false, error: "Error generando reporte mensual" });
   }
 });
+
 
 /* ============================================================
    📌 DAILY REPORT — SUPER ADMIN ONLY

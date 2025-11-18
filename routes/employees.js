@@ -202,9 +202,8 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
   try {
     const employeeId = req.params.id;
 
-    // 1. Validar empleado
     const employee = await getQuery(
-      `SELECT id, name, type, monthly_salary 
+      `SELECT id, name, type, monthly_salary
        FROM employees 
        WHERE id = $1 AND is_active = TRUE`,
       [employeeId]
@@ -218,21 +217,17 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
     const month = new Date().getMonth() + 1;
 
     /* ======================================================
-       ESTADÍSTICAS PARA EMPLEADOS DE PRODUCCIÓN
+       EMPLEADOS DE PRODUCCIÓN — CÁLCULO MENSUAL OFICIAL
     ====================================================== */
     if (employee.type === "Producción") {
 
       const stats = await getQuery(
         `
         SELECT 
-          COUNT(*) as dias_trabajados,
-          COALESCE(SUM(despalillo), 0) as total_despalillo,
-          COALESCE(SUM(escogida), 0) as total_escogida,
-          COALESCE(SUM(monado), 0) as total_monado,
-          COALESCE(SUM(t_despalillo), 0) as t_despalillo,
-          COALESCE(SUM(t_escogida), 0) as t_escogida,
-          COALESCE(SUM(t_monado), 0) as t_monado,
-          COALESCE(SUM(septimo_dia), 0) as septimo_dia
+          COUNT(*) AS days_worked,
+          COALESCE(SUM(despalillo), 0) AS sum_despalillo,
+          COALESCE(SUM(escogida), 0) AS sum_escogida,
+          COALESCE(SUM(monado), 0) AS sum_monado
         FROM attendance
         WHERE employee_id = $1
         AND EXTRACT(YEAR FROM date) = $2
@@ -242,44 +237,51 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
         [employeeId, year, month]
       );
 
-      // Convertir todo a número seguro
-      const diasTrab = Number(stats.dias_trabajados) || 0;
-      const tDespalillo = Number(stats.t_despalillo) || 0;
-      const tEscogida   = Number(stats.t_escogida) || 0;
-      const tMonado     = Number(stats.t_monado) || 0;
-      const septimoDia  = Number(stats.septimo_dia) || 0;
+      const daysWorked = Number(stats.days_worked) || 0;
 
-      const total = tDespalillo + tEscogida + tMonado;
-      const propSabado = total * 0.090909;
-      const neto = total + propSabado + septimoDia;
+      // Cálculos de producción reales
+      const TDes = Number(stats.sum_despalillo) * 80;
+      const TEsc = Number(stats.sum_escogida) * 70;
+      const TMon = Number(stats.sum_monado) * 1;
+
+      const totalProd = TDes + TEsc + TMon;
+
+      const saturdayBonus = Number((totalProd * 0.090909).toFixed(2));
+      const seventhDay = Number((totalProd * 0.181818).toFixed(2));
+
+      const netPay = Number((totalProd + saturdayBonus + seventhDay).toFixed(2));
 
       return res.json({
         success: true,
         data: {
-          dias_trabajados: diasTrab,
-          total_despalillo: tDespalillo,
-          total_escogida: tEscogida,
-          total_monado: tMonado,
-          t_despalillo: tDespalillo,
-          t_escogida: tEscogida,
-          t_monado: tMonado,
-          septimo_dia: septimoDia,
-          prop_sabado: Number(propSabado.toFixed(2)),
-          neto_pagar: Number(neto.toFixed(2)),
-          type: "Producción"
+          type: "Producción",
+          days_worked: daysWorked,
+
+          // Cantidades
+          total_despalillo: Number(stats.sum_despalillo),
+          total_escogida: Number(stats.sum_escogida),
+          total_monado: Number(stats.sum_monado),
+
+          // Totales en dinero
+          production_total: Number(totalProd.toFixed(2)),
+          saturday_bonus: saturdayBonus,
+          seventh_day: seventhDay,
+
+          // Neto final
+          net_pay: netPay
         }
       });
     }
 
     /* ======================================================
-       ESTADÍSTICAS PARA EMPLEADOS AL DÍA
+       EMPLEADOS AL DÍA — CÁLCULO MENSUAL OFICIAL
     ====================================================== */
 
     const stats = await getQuery(
       `
       SELECT 
-        COUNT(*) as dias_trabajados,
-        COALESCE(SUM(hours_extra), 0) as horas_extras
+        COUNT(*) AS days_worked,
+        COALESCE(SUM(hours_extra), 0) AS hours_extra
       FROM attendance
       WHERE employee_id = $1
       AND EXTRACT(YEAR FROM date) = $2
@@ -289,37 +291,40 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
       [employeeId, year, month]
     );
 
-    // Convertir a números seguros
-    const diasTrab = Number(stats.dias_trabajados) || 0;
-    const horasExtras = Number(stats.horas_extras) || 0;
+    const daysWorked = Number(stats.days_worked) || 0;
+    const hoursExtra = Number(stats.hours_extra) || 0;
 
-    const salarioMensual = Number(employee.monthly_salary) || 0;
-    const salarioDiario = salarioMensual / 30;
+    const monthlySalary = Number(employee.monthly_salary);
+    const dailySalary = monthlySalary / 30;
 
-    const valorHoraNormal = salarioDiario / 8;
-    const valorHE = valorHoraNormal * 1.25;
+    // Valor hora
+    const hourValue = dailySalary / 8;
+    const overtimeValue = hourValue + hourValue * 0.25;
 
-    const heDinero = horasExtras * valorHE;
-    const sabado = salarioDiario;
-    const septimoDia = diasTrab >= 5 ? salarioDiario : 0;
+    const overtimeMoney = Number((overtimeValue * hoursExtra).toFixed(2));
 
-    const neto =
-      diasTrab * salarioDiario +
-      heDinero +
-      sabado +
-      septimoDia;
+    // Sábado (siempre aplica)
+    const saturday = dailySalary;
 
-    res.json({
+    // 7mo día
+    const seventhDay = daysWorked >= 5 ? dailySalary : 0;
+
+    const netPay = Number(
+      (dailySalary * daysWorked + overtimeMoney + saturday + seventhDay).toFixed(2)
+    );
+
+    return res.json({
       success: true,
       data: {
-        dias_trabajados: diasTrab,
-        horas_extras: horasExtras,
-        he_dinero: Number(heDinero.toFixed(2)),
-        salario_diario: Number(salarioDiario.toFixed(2)),
-        sabado: Number(sabado.toFixed(2)),
-        septimo_dia: Number(septimoDia.toFixed(2)),
-        neto_pagar: Number(neto.toFixed(2)),
-        type: "Al Día"
+        type: "Al Día",
+        days_worked: daysWorked,
+
+        daily_salary: Number(dailySalary.toFixed(2)),
+        hours_extra: hoursExtra,
+        hours_extra_money: overtimeMoney,
+        saturday: Number(saturday.toFixed(2)),
+        seventh_day: Number(seventhDay.toFixed(2)),
+        net_pay: netPay
       }
     });
 
@@ -328,6 +333,8 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false, error: "Error obteniendo estadísticas" });
   }
 });
+
+
 
 
 module.exports = router;

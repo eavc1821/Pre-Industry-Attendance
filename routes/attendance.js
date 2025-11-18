@@ -153,11 +153,13 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
       return res.status(400).json({ success: false, error: 'Empleado está inactivo' });
     }
 
+    // Buscar entrada activa
     const attendanceRecord = await getQuery(
-      `SELECT a.*, e.name, e.type 
-       FROM attendance a 
-       JOIN employees e ON a.employee_id = e.id 
-       WHERE a.employee_id = $1 AND a.date = $2 AND a.exit_time IS NULL`,
+      `SELECT * 
+       FROM attendance 
+       WHERE employee_id = $1 
+         AND date = $2 
+         AND exit_time IS NULL`,
       [employee_id, today]
     );
 
@@ -168,62 +170,31 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
       });
     }
 
+    const exitTime = getLocalTimeOnly(); // HH:MM:SS
+
+    // Valores puros a almacenar
     const hoursExtraNum = parseFloat(hours_extra) || 0;
-    const despalilloNum = parseFloat(despalillo) || 0;
-    const escogidaNum = parseFloat(escogida) || 0;
-    const monadoNum = parseFloat(monado) || 0;
-
-    let t_despalillo = 0,
-        t_escogida = 0,
-        t_monado = 0,
-        prop_sabado = 0,
-        septimo_dia = 0;
-
-    if (employee.type === 'Producción') {
-      t_despalillo = despalilloNum * 80;
-      t_escogida = escogidaNum * 70;
-      t_monado = monadoNum * 1;
-
-      const total_produccion = t_despalillo + t_escogida + t_monado;
-
-      prop_sabado = total_produccion * 0.90909;
-      septimo_dia = total_produccion * 0.181818;
-    }
-
-    const now = new Date();
-    const exitTimestamp = getLocalTimestamp(); // TIMESTAMP local
-    const exitTimeOnly = getLocalTimeOnly();   // HH:MM:SS local
-
-
+    const desNum = parseFloat(despalillo) || 0;
+    const escNum = parseFloat(escogida) || 0;
+    const monNum = parseFloat(monado) || 0;
 
     await runQuery(
-  `UPDATE attendance 
-   SET exit_time = $1, 
-       hours_extra = $2, 
-       despalillo = $3, 
-       escogida = $4, 
-       monado = $5,
-       t_despalillo = $6, 
-       t_escogida = $7, 
-       t_monado = $8, 
-       prop_sabado = $9, 
-       septimo_dia = $10
-   WHERE id = $11`,
-  [
-    exitTimeOnly,      // ✔ AHORA ES CORRECTO (HH:MM:SS)
-    hoursExtraNum,
-    despalilloNum,
-    escogidaNum,
-    monadoNum,
-    t_despalillo,
-    t_escogida,
-    t_monado,
-    prop_sabado,
-    septimo_dia,
-    attendanceRecord.id
-  ]
-);
-
+      `UPDATE attendance 
+       SET exit_time = $1,
+           hours_extra = $2,
+           despalillo = $3,
+           escogida = $4,
+           monado = $5
+       WHERE id = $6`,
+      [
+        exitTime,
+        employee.type === 'Al Día' ? hoursExtraNum : 0,
+        employee.type === 'Producción' ? desNum : 0,
+        employee.type === 'Producción' ? escNum : 0,
+        employee.type === 'Producción' ? monNum : 0,
+        attendanceRecord.id
+      ]
+    );
 
     res.json({
       success: true,
@@ -231,19 +202,17 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
       data: {
         employee_id,
         employee_name: employee.name,
-        employee_type: employee.type,
+        employee_type: employee.type.toLowerCase(),
         date: today,
         entry_time: attendanceRecord.entry_time,
-        exit_time: exitTimestamp,
+        exit_time: exitTime,
+
+        // Datos puros diarios
         hours_extra: hoursExtraNum,
-        despalillo: despalilloNum,
-        escogida: escogidaNum,
-        monado: monadoNum,
-        t_despalillo,
-        t_escogida,
-        t_monado,
-        prop_sabado,
-        septimo_dia,
+        despalillo: desNum,
+        escogida: escNum,
+        monado: monNum,
+
         status: 'completed'
       }
     });
@@ -257,6 +226,7 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
   }
 });
 
+
 /* ================================================================
    GET /api/attendance/today
 ================================================================ */
@@ -264,18 +234,25 @@ router.get('/today', authenticateToken, async (req, res) => {
   try {
     const today = getLocalDate();
 
-    let records = await allQuery(
+    const records = await allQuery(
       `
       SELECT 
-        a.*,
+        a.id,
+        a.employee_id,
+        a.entry_time,
+        a.exit_time,
+        a.hours_extra,
+        a.t_despalillo,
+        a.t_escogida,
+        a.t_monado,
+        a.septimo_dia,
+        a.prop_sabado,
+
         e.name AS employee_name,
         e.dni AS employee_dni,
         e.type AS employee_type,
-        e.photo,
-        CASE 
-          WHEN a.exit_time IS NULL THEN 'active'
-          ELSE 'completed'
-        END AS status
+        e.photo
+
       FROM attendance a
       JOIN employees e ON a.employee_id = e.id
       WHERE a.date = $1
@@ -284,21 +261,40 @@ router.get('/today', authenticateToken, async (req, res) => {
       [today]
     );
 
-    // ----------------------------
-    // PATCH: Asegurar que records siempre sea array
-    // ----------------------------
-    const safeRecords = Array.isArray(records)
-      ? records
-      : records
-      ? [records]
-      : [];
+    const processed = (records || []).map(r => {
+      
+      const typeNorm = (r.employee_type || "").trim().toLowerCase();
 
-    const processed = safeRecords.map(r => ({
-      ...r,
-      entry_time_display: r.entry_time,
-      exit_time_display: r.exit_time || '-',
-      status_text: r.exit_time ? 'Completado' : 'En Trabajo'
-    }));
+      return {
+        id: r.id,
+        employee_id: r.employee_id,
+        employee_name: r.employee_name,
+        employee_dni: r.employee_dni,
+        employee_type: typeNorm,
+        photo: r.photo,
+
+        // Times formatted HH:mm
+        entry_time: r.entry_time,
+        exit_time: r.exit_time,
+        entry_time_display: r.entry_time ? r.entry_time.substring(0,5) : '-',
+        exit_time_display: r.exit_time ? r.exit_time.substring(0,5) : '-',
+
+        // Work state
+        is_working: r.exit_time === null,
+        status: r.exit_time === null ? "active" : "completed",
+        status_text: r.exit_time === null ? "En Trabajo" : "Completado",
+
+        // Raw attendance values
+        hours_extra: Number(r.hours_extra) || 0,
+
+        // Production fields
+        total_despalillo: Number(r.t_despalillo) || 0,
+        total_escogida: Number(r.t_escogida) || 0,
+        total_monado: Number(r.t_monado) || 0,
+        saturday_bonus: Number(r.prop_sabado) || 0,
+        seventh_day: Number(r.septimo_dia) || 0
+      };
+    });
 
     res.json({
       success: true,
@@ -314,5 +310,6 @@ router.get('/today', authenticateToken, async (req, res) => {
     });
   }
 });
+
 
 module.exports = router;
