@@ -273,60 +273,59 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
       });
     }
 
-    /* ======================================================
-       EMPLEADOS AL DÍA — CÁLCULO MENSUAL OFICIAL
-    ====================================================== */
+/* ======================================================
+   EMPLEADOS AL DÍA — CÁLCULO MENSUAL OFICIAL CORREGIDO
+====================================================== */
 
-    const stats = await getQuery(
-      `
-      SELECT 
-        COUNT(*) AS days_worked,
-        COALESCE(SUM(hours_extra), 0) AS hours_extra
-      FROM attendance
-      WHERE employee_id = $1
-      AND EXTRACT(YEAR FROM date) = $2
-      AND EXTRACT(MONTH FROM date) = $3
-      AND exit_time IS NOT NULL
-      `,
-      [employeeId, year, month]
-    );
+const stats = await getQuery(
+  `
+  SELECT 
+    COUNT(*) AS days_worked,
+    COALESCE(SUM(hours_extra), 0) AS hours_extra
+  FROM attendance
+  WHERE employee_id = $1
+  AND EXTRACT(YEAR FROM date) = $2
+  AND EXTRACT(MONTH FROM date) = $3
+  AND exit_time IS NOT NULL
+  `,
+  [employeeId, year, month]
+);
 
-    const daysWorked = Number(stats.days_worked) || 0;
-    const hoursExtra = Number(stats.hours_extra) || 0;
+const daysWorked = Number(stats.days_worked) || 0;
+const hoursExtra = Number(stats.hours_extra) || 0;
 
-    const monthlySalary = Number(employee.monthly_salary);
-    const dailySalary = monthlySalary / 30;
+const monthlySalary = Number(employee.monthly_salary);
+const dailySalary = monthlySalary / 30;
 
-    // Valor hora
-    const hourValue = dailySalary / 8;
-    const overtimeValue = hourValue + hourValue * 0.25;
+// Valor hora
+const hourValue = dailySalary / 8;
+const overtimeValue = hourValue + hourValue * 0.25;
 
-    const overtimeMoney = Number((overtimeValue * hoursExtra).toFixed(2));
+// Horas extra en dinero
+const overtimeMoney = Number((overtimeValue * hoursExtra).toFixed(2));
 
-    // Sábado (siempre aplica)
-    const saturday = dailySalary;
+// 7mo día (solo si trabaja 5 o más días)
+const seventhDay = daysWorked >= 5 ? dailySalary : 0;
 
-    // 7mo día
-    const seventhDay = daysWorked >= 5 ? dailySalary : 0;
+// NETO OFICIAL CORREGIDO
+const netPay = Number(
+  (dailySalary * daysWorked + overtimeMoney + seventhDay).toFixed(2)
+);
 
-    const netPay = Number(
-      (dailySalary * daysWorked + overtimeMoney + saturday + seventhDay).toFixed(2)
-    );
+return res.json({
+  success: true,
+  data: {
+    type: "Al Día",
+    days_worked: daysWorked,
 
-    return res.json({
-      success: true,
-      data: {
-        type: "Al Día",
-        days_worked: daysWorked,
+    daily_salary: Number(dailySalary.toFixed(2)),
+    hours_extra: hoursExtra,
+    hours_extra_money: overtimeMoney,
+    seventh_day: Number(seventhDay.toFixed(2)),
+    net_pay: netPay
+  }
+});
 
-        daily_salary: Number(dailySalary.toFixed(2)),
-        hours_extra: hoursExtra,
-        hours_extra_money: overtimeMoney,
-        saturday: Number(saturday.toFixed(2)),
-        seventh_day: Number(seventhDay.toFixed(2)),
-        net_pay: netPay
-      }
-    });
 
   } catch (error) {
     console.error("❌ Error obteniendo stats:", error);
