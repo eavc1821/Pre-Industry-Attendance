@@ -158,35 +158,39 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
       septimo_dia = total_produccion * 0.181818;
     }
 
-    const exitTimestamp = new Date().toISOString();
+    const now = new Date();
+    const exitTimestamp = now.toISOString();          // TIMESTAMP para logs / response
+    const exitTimeOnly = exitTimestamp.substring(11, 19);  // HH:MM:SS para columna TIME
+
 
     await runQuery(
-      `UPDATE attendance 
-       SET exit_time = $1, 
-           hours_extra = $2, 
-           despalillo = $3, 
-           escogida = $4, 
-           monado = $5,
-           t_despalillo = $6, 
-           t_escogida = $7, 
-           t_monado = $8, 
-           prop_sabado = $9, 
-           septimo_dia = $10
-       WHERE id = $11`,
-      [
-        exitTimestamp,
-        hoursExtraNum,
-        despalilloNum,
-        escogidaNum,
-        monadoNum,
-        t_despalillo,
-        t_escogida,
-        t_monado,
-        prop_sabado,
-        septimo_dia,
-        attendanceRecord.id
-      ]
-    );
+  `UPDATE attendance 
+   SET exit_time = $1, 
+       hours_extra = $2, 
+       despalillo = $3, 
+       escogida = $4, 
+       monado = $5,
+       t_despalillo = $6, 
+       t_escogida = $7, 
+       t_monado = $8, 
+       prop_sabado = $9, 
+       septimo_dia = $10
+   WHERE id = $11`,
+  [
+    exitTimeOnly,      // ✔ AHORA ES CORRECTO (HH:MM:SS)
+    hoursExtraNum,
+    despalilloNum,
+    escogidaNum,
+    monadoNum,
+    t_despalillo,
+    t_escogida,
+    t_monado,
+    prop_sabado,
+    septimo_dia,
+    attendanceRecord.id
+  ]
+);
+
 
     res.json({
       success: true,
