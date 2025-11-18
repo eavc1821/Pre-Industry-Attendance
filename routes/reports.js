@@ -27,7 +27,7 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       SELECT 
         a.id,
         a.employee_id,
-        e.name AS employee_name,
+        e.name AS employee,
         e.type AS employee_type,
         e.monthly_salary,
         a.date,
@@ -41,72 +41,101 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       JOIN employees e ON e.id = a.employee_id
       WHERE a.date BETWEEN $1 AND $2
       ORDER BY e.name ASC, a.date ASC
-      `,
+    `,
       [start, end]
     );
 
     if (!rows.length) {
-      return res.json({ success: true, data: [] });
+      return res.json({
+        success: true,
+        data: {
+          production: [],
+          alDia: [],
+          summary: {
+            total_employees: 0,
+            total_payroll: 0,
+            total_production_employees: 0,
+            total_aldia_employees: 0
+          }
+        }
+      });
     }
 
-    const result = rows.map(row => {
-      /* ======================================================
-         🔵 EMPLEADOS “AL DÍA”
-      ====================================================== */
-      if (row.employee_type === "Al Dia") {
-        const salarioMensual = N(row.monthly_salary);
-        const salarioDiario = salarioMensual / 30;
+    // Agrupar registros por tipo
+    const production = [];
+    const alDia = [];
 
-        const horasExtra = N(row.hours_extra);
-        const valorHora = salarioDiario / 8;
-        const valorHoraExtra = valorHora * 1.25;
-        const dineroHE = horasExtra * valorHoraExtra;
-
-        const neto =
-          salarioDiario + // 1 día trabajado
-          dineroHE +
-          N(row.septimo_dia);
-
-        return {
-          ...row,
-          dias_trabajados: 1,
-          salario_diario: Number(salarioDiario.toFixed(2)),
-          horas_extra_dinero: Number(dineroHE.toFixed(2)),
-          neto_pagar: Number(neto.toFixed(2)),
-        };
-      }
-
-      /* ======================================================
-         🟢 EMPLEADOS DE PRODUCCIÓN
-      ====================================================== */
+    rows.forEach(row => {
       if (row.employee_type === "Producción") {
         const tDesp = N(row.t_despalillo);
         const tEsco = N(row.t_escogida);
         const tMona = N(row.t_monado);
+        const propSabado = N(row.prop_sabado);
         const sept = N(row.septimo_dia);
 
-        const totalProd = tDesp + tEsco + tMona;
-        const propSabado = N(row.prop_sabado);
-        const neto = totalProd + propSabado + sept;
+        const neto = tDesp + tEsco + tMona + propSabado + sept;
 
-        return {
+        production.push({
           ...row,
-          total_produccion: Number(totalProd.toFixed(2)),
-          prop_sabado: Number(propSabado.toFixed(2)),
+          total_despalillo: tDesp,
+          total_escogida: tEsco,
+          total_monado: tMona,
+          total_produccion: tDesp + tEsco + tMona,
+          prop_sabado: propSabado,
+          septimo_dia: sept,
           neto_pagar: Number(neto.toFixed(2)),
-        };
-      }
+          dias_trabajados: 1
+        });
 
-      return row;
+      } else {
+        const salarioMensual = N(row.monthly_salary);
+        const salarioDiario = salarioMensual / 30;
+
+        const valorHoraExtra = (salarioDiario / 8) * 1.25;
+        const dineroHE = N(row.hours_extra) * valorHoraExtra;
+
+        const neto = salarioDiario + dineroHE + N(row.septimo_dia);
+
+        alDia.push({
+          ...row,
+          salario_diario: Number(salarioDiario.toFixed(2)),
+          horas_extra_dinero: Number(dineroHE.toFixed(2)),
+          dias_trabajados: 1,
+          neto_pagar: Number(neto.toFixed(2))
+        });
+      }
     });
 
-    res.json({ success: true, data: result });
+    // Resumen global
+    const summary = {
+      total_employees: production.length + alDia.length,
+      total_payroll: [
+        ...production,
+        ...alDia
+      ].reduce((sum, r) => sum + r.neto_pagar, 0),
+
+      total_production_employees: production.length,
+      total_production_payroll: production.reduce((sum, r) => sum + r.neto_pagar, 0),
+
+      total_aldia_employees: alDia.length,
+      total_aldia_payroll: alDia.reduce((sum, r) => sum + r.neto_pagar, 0)
+    };
+
+    res.json({
+      success: true,
+      data: {
+        production,
+        alDia,
+        summary
+      }
+    });
 
   } catch (error) {
     console.error("❌ Error generando reporte semanal:", error);
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 
 /* ============================================================
    📌 REPORTE MENSUAL — SOLO SUPER ADMIN
