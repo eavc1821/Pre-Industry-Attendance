@@ -4,13 +4,29 @@ const { authenticateToken, requireAdminOrScanner } = require('../middleware/auth
 
 const router = express.Router();
 
-const getLocalDate = () => {
+function getLocalTimestamp() {
   const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
+  const HondurasOffset = -6; // UTC-6
+  const local = new Date(now.getTime() + HondurasOffset * 60 * 60 * 1000);
+
+  const pad = (n) => n.toString().padStart(2, '0');
+
+  return `${local.getFullYear()}-${pad(local.getMonth() + 1)}-${pad(local.getDate())} ` +
+         `${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}`;
+}
+
+function getLocalTimeOnly() {
+  const now = new Date();
+  const HondurasOffset = -6; 
+  const local = new Date(now.getTime() + HondurasOffset * 60 * 60 * 1000);
+
+  const pad = (n) => n.toString().padStart(2, '0');
+
+  return `${pad(local.getHours())}:${pad(local.getMinutes())}:${pad(local.getSeconds())}`;
+}
+
+
+
 
 /* ================================================================
    POST /api/attendance/entry - Registrar entrada
@@ -60,8 +76,9 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
 
     const now = new Date();
 
-    const entryTimestamp = now.toISOString();              // TIMESTAMP
-    const entryTimeOnly = entryTimestamp.substring(11, 19); // TIME HH:MM:SS
+    const entryTimestamp = getLocalTimestamp(); // TIMESTAMP local
+    const entryTimeOnly = getLocalTimeOnly();   // HH:MM:SS local
+
 
     const result = await runQuery(
       `INSERT INTO attendance (employee_id, date, entry_time, created_at)
@@ -159,8 +176,9 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
     }
 
     const now = new Date();
-    const exitTimestamp = now.toISOString();          // TIMESTAMP para logs / response
-    const exitTimeOnly = exitTimestamp.substring(11, 19);  // HH:MM:SS para columna TIME
+    const exitTimestamp = getLocalTimestamp(); // TIMESTAMP local
+    const exitTimeOnly = getLocalTimeOnly();   // HH:MM:SS local
+
 
 
     await runQuery(
