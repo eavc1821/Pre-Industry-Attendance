@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { getQuery } = require("../config/database");
+const { getQuery, allQuery } = require("../config/database");
 const { authenticateToken, requireSuperAdmin } = require("../middleware/auth");
 
 /* ============================================================
