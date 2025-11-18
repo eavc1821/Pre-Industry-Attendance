@@ -46,30 +46,33 @@ async function authenticateToken(req, res, next) {
       });
     }
 
-    const user = await getQuery(
-      'SELECT id, username, role, is_active FROM users WHERE id = $1',
-      [decoded.id]
-    );
+    const users = await getQuery(
+        'SELECT id, username, role, is_active FROM users WHERE id = $1',
+        [decoded.id]
+      );
 
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        error: 'jwt malformed'
-      });
-    }
+      if (!users || users.length === 0) {
+        return res.status(401).json({
+          success: false,
+          error: 'jwt malformed'
+        });
+      }
 
-    if (!user.is_active) {
-      return res.status(403).json({
-        success: false,
-        error: 'Usuario inactivo'
-      });
-    }
+      const user = users[0];
 
-    req.user = {
-      id: user.id,
-      username: user.username,
-      role: user.role
-    };
+      if (!user.is_active) {
+        return res.status(403).json({
+          success: false,
+          error: 'Usuario inactivo'
+        });
+      }
+
+      req.user = {
+        id: user.id,
+        username: user.username,
+        role: user.role
+      };
+
 
     next();
 
