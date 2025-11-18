@@ -14,7 +14,6 @@ const N = (v) => Number(v) || 0;
 router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
     const { start, end } = req.query;
-
     if (!start || !end) {
       return res.status(400).json({
         success: false,
@@ -23,8 +22,9 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
     }
 
     const toNum = (v) => parseFloat(v) || 0;
+    const round2 = (v) => Number(Number(v || 0).toFixed(2));
 
-    // Obtener registros
+    // Traer todos los registros del rango (cada registro por día)
     const rows = await allQuery(
       `
       SELECT 
@@ -39,7 +39,8 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
         a.t_escogida,
         a.t_monado,
         a.prop_sabado,
-        a.septimo_dia
+        a.septimo_dia,
+        a.exit_time
       FROM attendance a
       JOIN employees e ON e.id = a.employee_id
       WHERE a.date BETWEEN $1 AND $2
@@ -64,142 +65,127 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       });
     }
 
-    const production = [];
-    const alDia = [];
+    // Maps para acumular por empleado
+    const prodMap = {};   // for production employees
+    const alDiaMap = {};  // for al dia employees
 
-    // Clasificar registros según tipo
     rows.forEach(row => {
+      const empId = row.employee_id;
       const empType = (row.employee_type || "").trim().toLowerCase();
 
-      /* =======================
-         PRODUCCIÓN
-      ========================== */
+      // solo contamos el dia como trabajado si exit_time != null
+      const workedToday = row.exit_time !== null && row.exit_time !== undefined;
+
       if (empType === "producción" || empType === "produccion") {
-
-        const tDesp = toNum(row.t_despalillo);
-        const tEsco = toNum(row.t_escogida);
-        const tMona = toNum(row.t_monado);
-        const propSab = toNum(row.prop_sabado);
-        const sept = toNum(row.septimo_dia);
-
-        const neto = tDesp + tEsco + tMona + propSab + sept;
-
-        production.push({
-          ...row,
-          total_despalillo: tDesp,
-          total_escogida: tEsco,
-          total_monado: tMona,
-          total_produccion: tDesp + tEsco + tMona,
-          prop_sabado: propSab,
-          septimo_dia: sept,
-          neto_pagar: neto,
-          dias_trabajados: 1
-        });
-
+        // producción: sumar t_* y días trabajados y séptimo/proporcional
+        if (!prodMap[empId]) {
+          prodMap[empId] = {
+            employee_id: empId,
+            employee: row.employee,
+            employee_type: row.employee_type,
+            monthly_salary: toNum(row.monthly_salary),
+            dias_trabajados: workedToday ? 1 : 0,
+            total_despalillo: toNum(row.t_despalillo),
+            total_escogida: toNum(row.t_escogida),
+            total_monado: toNum(row.t_monado),
+            prop_sabado: toNum(row.prop_sabado),
+            septimo_dia: toNum(row.septimo_dia) // si viene por registro; después lo sumamos
+          };
+        } else {
+          prodMap[empId].dias_trabajados += workedToday ? 1 : 0;
+          prodMap[empId].total_despalillo += toNum(row.t_despalillo);
+          prodMap[empId].total_escogida += toNum(row.t_escogida);
+          prodMap[empId].total_monado += toNum(row.t_monado);
+          prodMap[empId].prop_sabado += toNum(row.prop_sabado);
+          prodMap[empId].septimo_dia += toNum(row.septimo_dia);
+        }
       } else {
-
-        /* =======================
-           AL DÍA
-        ========================== */
-        const salarioMensual = toNum(row.monthly_salary);
-        const salarioDiario = salarioMensual / 30;
-
-        const valorHoraExtra = (salarioDiario / 8) * 1.25;
-        const dineroHE = toNum(row.hours_extra) * valorHoraExtra;
-
-        const sept = toNum(row.septimo_dia);
-        const neto = salarioDiario + dineroHE + sept;
-
-        alDia.push({
-          ...row,
-          salario_diario: salarioDiario,
-          horas_extra_dinero: dineroHE,
-          dias_trabajados: 1,
-          septimo_dia: sept,
-          neto_pagar: neto
-        });
+        // Al Día: acumular dias, sumar hours_extra acumuladas
+        if (!alDiaMap[empId]) {
+          alDiaMap[empId] = {
+            employee_id: empId,
+            employee: row.employee,
+            employee_type: row.employee_type,
+            monthly_salary: toNum(row.monthly_salary),
+            dias_trabajados: workedToday ? 1 : 0,
+            total_hours_extra: toNum(row.hours_extra || 0)
+          };
+        } else {
+          alDiaMap[empId].dias_trabajados += workedToday ? 1 : 0;
+          alDiaMap[empId].total_hours_extra += toNum(row.hours_extra || 0);
+        }
       }
     });
 
-    /* ============================================================
-       AGRUPAR PRODUCCIÓN POR EMPLEADO
-    ============================================================ */
-    const prodMap = {};
+    // Convertir producción a array y calcular netos (redondear)
+    const groupedProduction = Object.values(prodMap).map(emp => {
+      const tDesp = emp.total_despalillo;
+      const tEsco = emp.total_escogida;
+      const tMona = emp.total_monado;
+      const propSab = emp.prop_sabado;
+      const septos = emp.septimo_dia;
 
-    production.forEach(p => {
-      if (!prodMap[p.employee_id]) {
-        prodMap[p.employee_id] = { ...p };
-      } else {
-        prodMap[p.employee_id].total_despalillo += p.total_despalillo;
-        prodMap[p.employee_id].total_escogida += p.total_escogida;
-        prodMap[p.employee_id].total_monado += p.total_monado;
-        prodMap[p.employee_id].total_produccion += p.total_produccion;
-        prodMap[p.employee_id].prop_sabado += p.prop_sabado;
-        prodMap[p.employee_id].septimo_dia += p.septimo_dia;
-        prodMap[p.employee_id].neto_pagar += p.neto_pagar;
-        prodMap[p.employee_id].dias_trabajados += 1;
-      }
+      const totalProduccion = tDesp + tEsco + tMona;
+      const neto = totalProduccion + propSab + septos;
+
+      return {
+        ...emp,
+        total_produccion: round2(totalProduccion),
+        total_despalillo: round2(tDesp),
+        total_escogida: round2(tEsco),
+        total_monado: round2(tMona),
+        prop_sabado: round2(propSab),
+        septimo_dia: round2(septos),
+        neto_pagar: round2(neto)
+      };
     });
 
-    const groupedProduction = Object.values(prodMap).map(emp => ({
-      ...emp,
-      total_despalillo: Number(emp.total_despalillo.toFixed(2)),
-      total_escogida: Number(emp.total_escogida.toFixed(2)),
-      total_monado: Number(emp.total_monado.toFixed(2)),
-      total_produccion: Number(emp.total_produccion.toFixed(2)),
-      prop_sabado: Number(emp.prop_sabado.toFixed(2)),
-      septimo_dia: Number(emp.septimo_dia.toFixed(2)),
-      neto_pagar: Number(emp.neto_pagar.toFixed(2))
-    }));
+    // Convertir alDia a array y aplicar la fórmula unificada
+    const groupedAlDia = Object.values(alDiaMap).map(emp => {
+      const salarioMensual = emp.monthly_salary || 0;
+      const salarioDiario = salarioMensual / 30;
+      const dias = emp.dias_trabajados || 0;
 
+      // sueldo base = dias_trabajados * salario_diario
+      const sueldoBase = dias * salarioDiario;
 
-    /* ============================================================
-       AGRUPAR AL DÍA POR EMPLEADO
-    ============================================================ */
-    const alDiaMap = {};
+      // horas extras acumuladas -> valor por hora y dinero total
+      const valorHoraNormal = salarioDiario / 8;
+      const valorHE = valorHoraNormal * 1.25;
+      const horasExtraTotal = emp.total_hours_extra || 0;
+      const horas_extra_dinero = horasExtraTotal * valorHE;
 
-    alDia.forEach(a => {
-      if (!alDiaMap[a.employee_id]) {
-        alDiaMap[a.employee_id] = { ...a };
-      } else {
-        alDiaMap[a.employee_id].horas_extra_dinero += a.horas_extra_dinero;
-        alDiaMap[a.employee_id].septimo_dia += a.septimo_dia;
-        alDiaMap[a.employee_id].neto_pagar += a.neto_pagar;
-        alDiaMap[a.employee_id].dias_trabajados += 1;
-      }
+      // séptimo día: se aplica si trabajó >= 5 días en el rango
+      const septimo_dia = dias >= 5 ? salarioDiario : 0;
+
+      const neto = sueldoBase + horas_extra_dinero + septimo_dia;
+
+      return {
+        ...emp,
+        salario_diario: round2(salarioDiario),
+        sueldo_base: round2(sueldoBase),
+        horas_extra: round2(horasExtraTotal),
+        horas_extra_dinero: round2(horas_extra_dinero),
+        septimo_dia: round2(septimo_dia),
+        neto_pagar: round2(neto)
+      };
     });
 
-    const groupedAlDia = Object.values(alDiaMap).map(emp => ({
-      ...emp,
-      salario_diario: Number(emp.salario_diario.toFixed(2)),
-      horas_extra_dinero: Number(emp.horas_extra_dinero.toFixed(2)),
-      septimo_dia: Number(emp.septimo_dia.toFixed(2)),
-      neto_pagar: Number(emp.neto_pagar.toFixed(2))
-    }));
+    // Resumen global (redondeado)
+    const total_payroll = round2(
+      [...groupedProduction, ...groupedAlDia].reduce((s, e) => s + toNum(e.neto_pagar), 0)
+    );
 
-    
-    /* ===========================
-       RESUMEN FINAL
-    ============================ */
     const summary = {
       total_employees: groupedProduction.length + groupedAlDia.length,
-      total_payroll: [...groupedProduction, ...groupedAlDia]
-        .reduce((sum, e) => sum + e.neto_pagar, 0),
-
+      total_payroll,
       total_production_employees: groupedProduction.length,
-      total_production_payroll: groupedProduction
-        .reduce((s, e) => s + e.neto_pagar, 0),
-
       total_aldia_employees: groupedAlDia.length,
-      total_aldia_payroll: groupedAlDia
-        .reduce((s, e) => s + e.neto_pagar, 0)
+      total_production_payroll: round2(groupedProduction.reduce((s,e)=>s + toNum(e.neto_pagar),0)),
+      total_aldia_payroll: round2(groupedAlDia.reduce((s,e)=>s + toNum(e.neto_pagar),0))
     };
 
-
-    /* ===========================
-       RESPUESTA FINAL
-    ============================ */
-    res.json({
+    return res.json({
       success: true,
       data: {
         production: groupedProduction,
@@ -213,8 +199,6 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
-
 
 
 /* ============================================================
