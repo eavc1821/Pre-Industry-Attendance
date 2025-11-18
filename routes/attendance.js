@@ -77,7 +77,7 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
       success: true,
       message: `Entrada registrada para ${employee.name}`,
       data: {
-        id: result[0].id,
+        id: result.id,
         employee_id,
         employee_name: employee.name,
         employee_type: employee.type,
