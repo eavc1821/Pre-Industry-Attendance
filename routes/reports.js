@@ -1,15 +1,15 @@
 const express = require("express");
 const router = express.Router();
-const { getQuery, runQuery } = require("../config/database");
+const { getQuery } = require("../config/database");
 const { authenticateToken, requireSuperAdmin } = require("../middleware/auth");
 
 /* ============================================================
-   🛠 FUNCIÓN SEGURA PARA CONVERTIR NÚMEROS
+   Función para convertir valores numéricos de forma segura
 ============================================================ */
 const N = (v) => Number(v) || 0;
 
 /* ============================================================
-   📌 ENDPOINT: REPORTE SEMANAL (SOLO SUPER ADMIN)
+   📌 REPORTE SEMANAL — SOLO SUPER ADMIN
 ============================================================ */
 router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
@@ -18,7 +18,7 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
     if (!start || !end) {
       return res.status(400).json({
         success: false,
-        error: "Debe enviar 'start' y 'end' para generar el reporte."
+        error: "Debe enviar 'start' y 'end' en formato YYYY-MM-DD."
       });
     }
 
@@ -36,9 +36,7 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
         a.t_escogida,
         a.t_monado,
         a.prop_sabado,
-        a.septimo_dia,
-        a.dias_trabajados,
-        a.sabado
+        a.septimo_dia
       FROM attendance a
       JOIN employees e ON e.id = a.employee_id
       WHERE a.date BETWEEN $1 AND $2
@@ -51,42 +49,35 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       return res.json({ success: true, data: [] });
     }
 
-    const processed = rows.map((row) => {
-
+    const result = rows.map(row => {
       /* ======================================================
-         🔵 EMPLEADOS AL DÍA
+         🔵 EMPLEADOS “AL DÍA”
       ====================================================== */
       if (row.employee_type === "Al Dia") {
         const salarioMensual = N(row.monthly_salary);
         const salarioDiario = salarioMensual / 30;
 
-        const dias = N(row.dias_trabajados);
-        const he = N(row.hours_extra);
-
-        const sab = N(row.sabado);
-        const sept = N(row.septimo_dia);
-
+        const horasExtra = N(row.hours_extra);
         const valorHora = salarioDiario / 8;
-        const valorExtra = valorHora * 1.25;
-
-        const dineroHE = he * valorExtra;
+        const valorHoraExtra = valorHora * 1.25;
+        const dineroHE = horasExtra * valorHoraExtra;
 
         const neto =
-          dias * salarioDiario +
+          salarioDiario + // 1 día trabajado
           dineroHE +
-          sab +
-          sept;
+          N(row.septimo_dia);
 
         return {
           ...row,
+          dias_trabajados: 1,
           salario_diario: Number(salarioDiario.toFixed(2)),
-          he_dinero: Number(dineroHE.toFixed(2)),
+          horas_extra_dinero: Number(dineroHE.toFixed(2)),
           neto_pagar: Number(neto.toFixed(2)),
         };
       }
 
       /* ======================================================
-         🟢 EMPLEADOS PRODUCCIÓN
+         🟢 EMPLEADOS DE PRODUCCIÓN
       ====================================================== */
       if (row.employee_type === "Producción") {
         const tDesp = N(row.t_despalillo);
@@ -95,8 +86,7 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
         const sept = N(row.septimo_dia);
 
         const totalProd = tDesp + tEsco + tMona;
-        const propSabado = totalProd * 0.090909;
-
+        const propSabado = N(row.prop_sabado);
         const neto = totalProd + propSabado + sept;
 
         return {
@@ -110,10 +100,7 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       return row;
     });
 
-    res.json({
-      success: true,
-      data: processed,
-    });
+    res.json({ success: true, data: result });
 
   } catch (error) {
     console.error("❌ Error generando reporte semanal:", error);
@@ -122,7 +109,7 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
 });
 
 /* ============================================================
-   📌 ENDPOINT: REPORTE MENSUAL (SOLO SUPER ADMIN)
+   📌 REPORTE MENSUAL — SOLO SUPER ADMIN
 ============================================================ */
 router.get("/monthly", authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
@@ -131,7 +118,7 @@ router.get("/monthly", authenticateToken, requireSuperAdmin, async (req, res) =>
     if (!year || !month) {
       return res.status(400).json({
         success: false,
-        error: "Debe enviar 'year' y 'month'."
+        error: "Debe enviar year y month en formato válido."
       });
     }
 
@@ -153,10 +140,7 @@ router.get("/monthly", authenticateToken, requireSuperAdmin, async (req, res) =>
       [start, end]
     );
 
-    res.json({
-      success: true,
-      data: rows
-    });
+    res.json({ success: true, data: rows });
 
   } catch (error) {
     console.error("❌ Error generando reporte mensual:", error);
@@ -165,7 +149,7 @@ router.get("/monthly", authenticateToken, requireSuperAdmin, async (req, res) =>
 });
 
 /* ============================================================
-   📌 ENDPOINT: REPORTE DIARIO (SOLO SUPER ADMIN)
+   📌 REPORTE DIARIO — SOLO SUPER ADMIN
 ============================================================ */
 router.get("/daily", authenticateToken, requireSuperAdmin, async (req, res) => {
   try {
@@ -194,8 +178,6 @@ router.get("/daily", authenticateToken, requireSuperAdmin, async (req, res) => {
         a.t_monado,
         a.prop_sabado,
         a.septimo_dia,
-        a.dias_trabajados,
-        a.sabado,
         a.date
       FROM attendance a
       JOIN employees e ON e.id = a.employee_id
@@ -205,34 +187,18 @@ router.get("/daily", authenticateToken, requireSuperAdmin, async (req, res) => {
       [date]
     );
 
-    if (!rows.length) {
-      return res.json({ success: true, data: [] });
-    }
+    const processed = rows.map(row => {
 
-    const processed = rows.map((row) => {
-
-      /* ----------
-         AL DÍA
-      ----------- */
       if (row.employee_type === "Al Dia") {
         const salarioMensual = N(row.monthly_salary);
         const salarioDiario = salarioMensual / 30;
 
-        const dias = N(row.dias_trabajados);
-        const he = N(row.hours_extra);
-
-        const sab = N(row.sabado);
-        const sept = N(row.septimo_dia);
-
+        const horasExtra = N(row.hours_extra);
         const valorHora = salarioDiario / 8;
-        const valorExtra = valorHora * 1.25;
-        const dineroHE = he * valorExtra;
+        const valorHE = valorHora * 1.25;
+        const dineroHE = horasExtra * valorHE;
 
-        const neto =
-          dias * salarioDiario +
-          dineroHE +
-          sab +
-          sept;
+        const neto = salarioDiario + dineroHE + N(row.septimo_dia);
 
         return {
           ...row,
@@ -243,25 +209,20 @@ router.get("/daily", authenticateToken, requireSuperAdmin, async (req, res) => {
         };
       }
 
-      /* ----------
-         PRODUCCIÓN
-      ----------- */
       if (row.employee_type === "Producción") {
         const tDesp = N(row.t_despalillo);
         const tEsco = N(row.t_escogida);
         const tMona = N(row.t_monado);
+        const propSabado = N(row.prop_sabado);
         const sept = N(row.septimo_dia);
 
         const totalProd = tDesp + tEsco + tMona;
-        const propSabado = totalProd * 0.090909;
-
         const neto = totalProd + propSabado + sept;
 
         return {
           ...row,
           tipo: "Producción",
           total_produccion: Number(totalProd.toFixed(2)),
-          prop_sabado: Number(propSabado.toFixed(2)),
           neto_pagar: Number(neto.toFixed(2)),
         };
       }
@@ -269,10 +230,7 @@ router.get("/daily", authenticateToken, requireSuperAdmin, async (req, res) => {
       return row;
     });
 
-    res.json({
-      success: true,
-      data: processed
-    });
+    res.json({ success: true, data: processed });
 
   } catch (error) {
     console.error("❌ Error generando reporte diario:", error);
