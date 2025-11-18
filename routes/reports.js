@@ -1,197 +1,319 @@
-const express = require('express');
-const { allQuery } = require('../config/database');
-const { authenticateToken } = require('../middleware/auth');
-
+const express = require("express");
 const router = express.Router();
+const { getQuery, runQuery } = require("../config/database");
+const { authenticateToken, requireAdmin } = require("../middleware/auth");
 
-/* ================================================================
-   GET /api/reports/daily - Reporte diario
-================================================================ */
-router.get('/daily', authenticateToken, async (req, res) => {
+
+
+/* ============================================================
+   📌 ENDPOINT: REPORTE DIARIO
+   Devuelve TODOS los empleados que tuvieron asistencia ese día
+============================================================ */
+router.get("/daily", authenticateToken, requireAdmin, async (req, res) => {
   try {
     const { date } = req.query;
-    const reportDate = date || new Date().toISOString().split('T')[0];
 
-    const records = await allQuery(
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        error: "Debe enviar ?date=YYYY-MM-DD"
+      });
+    }
+
+    const rows = await getQuery(
       `
-      SELECT 
-        e.id AS employee_id,
+      SELECT
+        a.id,
+        a.employee_id,
         e.name AS employee_name,
-        e.dni,
         e.type AS employee_type,
-        e.photo,
+        e.monthly_salary,
         a.entry_time,
         a.exit_time,
         a.hours_extra,
-        a.despalillo,
-        a.escogida,
-        a.monado,
-        CASE 
-          WHEN a.entry_time IS NOT NULL AND a.exit_time IS NULL THEN 'En trabajo'
-          WHEN a.entry_time IS NOT NULL AND a.exit_time IS NOT NULL THEN 'Completado'
-          ELSE 'No registrado'
-        END AS status
-      FROM employees e
-      LEFT JOIN attendance a 
-        ON e.id = a.employee_id 
-       AND a.date = $1
-      WHERE e.is_active = TRUE
-      ORDER BY e.type, e.name
+        a.t_despalillo,
+        a.t_escogida,
+        a.t_monado,
+        a.prop_sabado,
+        a.septimo_dia,
+        a.dias_trabajados,
+        a.sabado,
+        a.date
+      FROM attendance a
+      JOIN employees e ON e.id = a.employee_id
+      WHERE a.date = $1
+      ORDER BY e.name ASC
       `,
-      [reportDate]
+      [date]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.json({
+        success: true,
+        message: "No hay registros para la fecha solicitada.",
+        data: []
+      });
+    }
+
+    const processed = rows.map((row) => {
+      // Función rápida Number segura:
+      const N = (v) => Number(v) || 0;
+
+      // ---------------------------------------------
+      // 🔵 EMPLEADOS AL DÍA
+      // ---------------------------------------------
+      if (row.employee_type === "Al Dia") {
+        const salarioDiario = N(row.monthly_salary) / 30;
+        const valorHora = salarioDiario / 8;
+        const valorExtra = valorHora * 1.25;
+
+        const he = N(row.hours_extra);
+        const dineroHE = he * valorExtra;
+
+        const sab = N(row.sabado);
+        const sept = N(row.septimo_dia);
+        const dias = N(row.dias_trabajados);
+
+        const neto =
+          dias * salarioDiario +
+          dineroHE +
+          sab +
+          sept;
+
+        return {
+          ...row,
+          tipo: "Al Día",
+          salario_diario: Number(salarioDiario.toFixed(2)),
+          horas_extra_dinero: Number(dineroHE.toFixed(2)),
+          neto_pagar: Number(neto.toFixed(2)),
+        };
+      }
+
+      // ---------------------------------------------
+      // 🟢 EMPLEADOS PRODUCCIÓN
+      // ---------------------------------------------
+      if (row.employee_type === "Producción") {
+        const tDesp = N(row.t_despalillo);
+        const tEsco = N(row.t_escogida);
+        const tMona = N(row.t_monado);
+        const sept = N(row.septimo_dia);
+
+        const totalProd = tDesp + tEsco + tMona;
+        const propSabado = totalProd * 0.090909;
+
+        const neto = totalProd + propSabado + sept;
+
+        return {
+          ...row,
+          tipo: "Producción",
+          total_produccion: Number(totalProd.toFixed(2)),
+          prop_sabado: Number(propSabado.toFixed(2)),
+          neto_pagar: Number(neto.toFixed(2)),
+        };
+      }
+
+      return row;
+    });
+
+    res.json({
+      success: true,
+      data: processed
+    });
+
+  } catch (error) {
+    console.error("❌ Error generando reporte diario:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+
+/* ============================================================
+   🛠 FUNCIONES AUXILIARES PARA CONVERSIÓN SEGURA
+============================================================ */
+const N = (v) => Number(v) || 0;
+
+/* ============================================================
+   📌 ENDPOINT: REPORTE SEMANAL
+============================================================ */
+router.get("/weekly", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { start, end } = req.query;
+
+    if (!start || !end) {
+      return res.status(400).json({
+        success: false,
+        error: "Debe enviar 'start' y 'end' para generar el reporte."
+      });
+    }
+
+    // 🔍 Obtener todos los registros del rango solicitado
+    const rows = await getQuery(
+      `
+      SELECT 
+        a.id,
+        a.employee_id,
+        e.name AS employee_name,
+        e.type AS employee_type,
+        e.monthly_salary,
+        a.date,
+        a.hours_extra,
+        a.t_despalillo,
+        a.t_escogida,
+        a.t_monado,
+        a.prop_sabado,
+        a.septimo_dia,
+        a.dias_trabajados,
+        a.sabado
+      FROM attendance a
+      JOIN employees e ON e.id = a.employee_id
+      WHERE a.date BETWEEN $1 AND $2
+      ORDER BY e.name ASC, a.date ASC
+      `,
+      [start, end]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.json({
+        success: true,
+        message: "No hay datos en este rango.",
+        data: []
+      });
+    }
+
+    /* ============================================================
+       🧮 PROCESAMIENTO DEL REPORTE
+    ============================================================ */
+    const processed = rows.map((row) => {
+      /* ---------------------------------------------
+         🔵 PROCESAR EMPLEADOS "AL DÍA"
+      --------------------------------------------- */
+      if (row.employee_type === "Al Dia") {
+        const salarioMensual = N(row.monthly_salary);
+        const salarioDiario = salarioMensual / 30;
+
+        const dias = N(row.dias_trabajados);
+        const he = N(row.hours_extra);
+
+        const sabado = N(row.sabado);
+        const septimo = N(row.septimo_dia);
+
+        const valorHora = salarioDiario / 8;
+        const valorHoraExtra = valorHora * 1.25;
+
+        const dineroHE = he * valorHoraExtra;
+
+        const neto =
+          dias * salarioDiario +
+          dineroHE +
+          sabado +
+          septimo;
+
+        return {
+          ...row,
+          dias_trabajados: dias,
+          hours_extra: he,
+          he_dinero: Number(dineroHE.toFixed(2)),
+          salario_diario: Number(salarioDiario.toFixed(2)),
+          salario_mensual: salarioMensual,
+          sabado,
+          septimo_dia: septimo,
+          neto_pagar: Number((neto || 0).toFixed(2)),
+        };
+      }
+
+      /* ---------------------------------------------
+         🟢 PROCESAR EMPLEADOS DE "PRODUCCIÓN"
+      --------------------------------------------- */
+      if (row.employee_type === "Producción") {
+        const tDesp = N(row.t_despalillo);
+        const tEsco = N(row.t_escogida);
+        const tMona = N(row.t_monado);
+        const sept = N(row.septimo_dia);
+
+        const totalProd = tDesp + tEsco + tMona;
+
+        const propSabado = totalProd * 0.090909;
+
+        const neto = totalProd + propSabado + sept;
+
+        return {
+          ...row,
+          t_despalillo: tDesp,
+          t_escogida: tEsco,
+          t_monado: tMona,
+          prop_sabado: Number(propSabado.toFixed(2)),
+          septimo_dia: sept,
+          total_produccion: Number(totalProd.toFixed(2)),
+          neto_pagar: Number((neto || 0).toFixed(2)),
+        };
+      }
+
+      return row;
+    });
+
+    /* ============================================================
+       📤 RESPUESTA FINAL
+    ============================================================ */
+    res.json({
+      success: true,
+      data: processed,
+    });
+
+  } catch (error) {
+    console.error("❌ Error generando reporte semanal:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/* ============================================================
+   📌 ENDPOINT: REPORTE MENSUAL
+============================================================ */
+router.get("/monthly", authenticateToken, requireAdmin, async (req, res) => {
+  try {
+    const { year, month } = req.query;
+
+    if (!year || !month) {
+      return res.status(400).json({
+        success: false,
+        error: "Debe enviar 'year' y 'month'."
+      });
+    }
+
+    const start = `${year}-${month}-01`;
+    const end = `${year}-${month}-31`;
+
+    const rows = await getQuery(
+      `
+      SELECT 
+        a.*,
+        e.name AS employee_name,
+        e.type AS employee_type,
+        e.monthly_salary
+      FROM attendance a
+      JOIN employees e ON e.id = a.employee_id
+      WHERE a.date BETWEEN $1 AND $2
+      ORDER BY e.name ASC, a.date ASC
+      `,
+      [start, end]
     );
 
     res.json({
       success: true,
-      data: records,
-      date: reportDate,
-      count: records.length
+      data: rows
     });
 
   } catch (error) {
-    console.error('❌ Error generando reporte diario:', error);
-    res.status(500).json({ success: false, error: 'Error al generar reporte diario' });
-  }
-});
-
-/* ================================================================
-   GET /api/reports/weekly - Reporte semanal completo
-================================================================ */
-router.get('/weekly', authenticateToken, async (req, res) => {
-  try {
-    const { start_date, end_date } = req.query;
-
-    if (!start_date || !end_date) {
-      return res.status(400).json({
-        success: false,
-        error: 'Fecha inicio y fecha fin son requeridas'
-      });
-    }
-
-    // --- CONSULTA PRODUCCIÓN ---
-    const productionQuery = `
-      SELECT 
-        e.id AS employee_id,
-        e.name AS employee,
-        e.dni,
-        COUNT(a.id) AS dias_trabajados,
-        SUM(COALESCE(a.despalillo, 0)) AS total_despalillo,
-        SUM(COALESCE(a.escogida, 0)) AS total_escogida,
-        SUM(COALESCE(a.monado, 0)) AS total_monado,
-        SUM(COALESCE(a.t_despalillo, 0)) AS t_despalillo,
-        SUM(COALESCE(a.t_escogida, 0)) AS t_escogida,
-        SUM(COALESCE(a.t_monado, 0)) AS t_monado,
-        SUM(COALESCE(a.prop_sabado, 0)) AS prop_sabado,
-        SUM(COALESCE(a.septimo_dia, 0)) AS septimo_dia
-      FROM employees e
-      INNER JOIN attendance a ON e.id = a.employee_id 
-      WHERE e.type = 'Producción'
-        AND e.is_active = TRUE
-        AND a.date BETWEEN $1 AND $2
-        AND a.exit_time IS NOT NULL
-      GROUP BY e.id
-      HAVING COUNT(a.id) > 0
-    `;
-
-    // --- CONSULTA AL DÍA ---
-    const alDiaQuery = `
-      SELECT 
-        e.id AS employee_id,
-        e.name AS employee,
-        e.dni,
-        e.monthly_salary,
-        COUNT(a.id) AS dias_trabajados,
-        SUM(COALESCE(a.hours_extra, 0)) AS horas_extras,
-        SUM(COALESCE(a.prop_sabado, 0)) AS sabado,
-        SUM(COALESCE(a.septimo_dia, 0)) AS septimo_dia
-      FROM employees e
-      INNER JOIN attendance a ON e.id = a.employee_id 
-      WHERE e.type = 'Al Dia'
-        AND e.is_active = TRUE
-        AND a.date BETWEEN $1 AND $2
-        AND a.exit_time IS NOT NULL
-      GROUP BY e.id
-      HAVING COUNT(a.id) > 0
-    `;
-
-    // Ejecutar ambas consultas
-    const [productionRows, alDiaRows] = await Promise.all([
-      allQuery(productionQuery, [start_date, end_date]),
-      allQuery(alDiaQuery, [start_date, end_date])
-    ]);
-
-    /* ================================================================
-       CÁLCULOS PRODUCCIÓN
-    ================================================================ */
-    const productionWithTotals = productionRows.map(row => {
-      const totalProd =
-        (row.t_despalillo || 0) +
-        (row.t_escogida || 0) +
-        (row.t_monado || 0);
-
-      const propSabado = totalProd * 0.090909;
-      const neto = totalProd + propSabado + (row.septimo_dia || 0);
-
-      return {
-        ...row,
-        total_produccion: Number(totalProd.toFixed(2)),
-        prop_sabado: Number(propSabado.toFixed(2)),
-        neto_pagar: Number(neto.toFixed(2))
-      };
+    console.error("❌ Error generando reporte mensual:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message
     });
-
-    /* ================================================================
-       CÁLCULOS AL DÍA
-    ================================================================ */
-    const alDiaWithTotals = alDiaRows.map(row => {
-      const salario_diario = (row.monthly_salary || 0) / 30;
-      const valorHora = salario_diario / 8;
-      const valorHE = valorHora * 1.25;
-
-      const heDinero = valorHE * (row.horas_extras || 0);
-
-      const neto =
-        (row.dias_trabajados * salario_diario) +
-        heDinero +
-        (row.sabado || 0) +
-        (row.septimo_dia || 0);
-
-      return {
-        ...row,
-        salario_diario: Number(salario_diario.toFixed(2)),
-        he_dinero: Number(heDinero.toFixed(2)),
-        sabado: Number(row.sabado || 0),
-        septimo_dia: Number(row.septimo_dia || 0),
-        neto_pagar: Number(neto.toFixed(2))
-      };
-    });
-
-    /* ================================================================
-       SUMATORIAS
-    ================================================================ */
-    const totalProduction = productionWithTotals.reduce((acc, r) => acc + r.neto_pagar, 0);
-    const totalAlDia = alDiaWithTotals.reduce((acc, r) => acc + r.neto_pagar, 0);
-
-    res.json({
-      success: true,
-      data: {
-        production: productionWithTotals,
-        alDia: alDiaWithTotals
-      },
-      summary: {
-        total_employees: productionWithTotals.length + alDiaWithTotals.length,
-        total_production_employees: productionWithTotals.length,
-        total_aldia_employees: alDiaWithTotals.length,
-        total_payroll: Number((totalProduction + totalAlDia).toFixed(2)),
-        total_production_payroll: Number(totalProduction.toFixed(2)),
-        total_aldia_payroll: Number(totalAlDia.toFixed(2)),
-        period: { start_date, end_date }
-      }
-    });
-
-  } catch (error) {
-    console.error('❌ Error generando reporte semanal:', error);
-    res.status(500).json({ success: false, error: 'Error al generar reporte semanal' });
   }
 });
 
