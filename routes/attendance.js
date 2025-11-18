@@ -4,6 +4,21 @@ const { authenticateToken, requireAdminOrScanner } = require('../middleware/auth
 
 const router = express.Router();
 
+function getLocalDate() {
+  const now = new Date();
+  const HondurasOffset = -6; // UTC-6
+  const local = new Date(now.getTime() + HondurasOffset * 60 * 60 * 1000);
+
+  const pad = (n) => n.toString().padStart(2, '0');
+
+  const year = local.getFullYear();
+  const month = pad(local.getMonth() + 1);
+  const day = pad(local.getDate());
+
+  return `${year}-${month}-${day}`;
+}
+
+
 function getLocalTimestamp() {
   const now = new Date();
   const HondurasOffset = -6; // UTC-6
