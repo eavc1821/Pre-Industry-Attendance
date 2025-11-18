@@ -22,7 +22,11 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       });
     }
 
-    const rows = await getQuery(
+    // Función para convertir seguro
+    const toNum = (v) => parseFloat(v) || 0;
+
+    // Traer datos de asistencia + empleado
+    const rows = await allQuery(
       `
       SELECT 
         a.id,
@@ -45,7 +49,8 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       [start, end]
     );
 
-    if (!rows.length) {
+    // Si no hay registros
+    if (!rows || rows.length === 0) {
       return res.json({
         success: true,
         data: {
@@ -61,19 +66,26 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       });
     }
 
-    // Agrupar registros por tipo
+    // Listas separadas
     const production = [];
     const alDia = [];
 
+    // Clasificar
     rows.forEach(row => {
-      if (row.employee_type === "Producción") {
-        const tDesp = N(row.t_despalillo);
-        const tEsco = N(row.t_escogida);
-        const tMona = N(row.t_monado);
-        const propSabado = N(row.prop_sabado);
-        const sept = N(row.septimo_dia);
+      const empType = (row.employee_type || "").trim().toLowerCase();
 
-        const neto = tDesp + tEsco + tMona + propSabado + sept;
+      /* ============================================================
+         🟦 EMPLEADOS DE PRODUCCIÓN
+      ============================================================ */
+      if (empType === "producción" || empType === "produccion") {
+
+        const tDesp = toNum(row.t_despalillo);
+        const tEsco = toNum(row.t_escogida);
+        const tMona = toNum(row.t_monado);
+        const propSab = toNum(row.prop_sabado);
+        const sept = toNum(row.septimo_dia);
+
+        const neto = tDesp + tEsco + tMona + propSab + sept;
 
         production.push({
           ...row,
@@ -81,27 +93,33 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
           total_escogida: tEsco,
           total_monado: tMona,
           total_produccion: tDesp + tEsco + tMona,
-          prop_sabado: propSabado,
+          prop_sabado: propSab,
           septimo_dia: sept,
-          neto_pagar: Number(neto.toFixed(2)),
+          neto_pagar: neto,
           dias_trabajados: 1
         });
 
       } else {
-        const salarioMensual = N(row.monthly_salary);
+        /* ============================================================
+           🟩 EMPLEADOS AL DÍA (TU CASO ACTUAL)
+        ============================================================ */
+
+        const salarioMensual = toNum(row.monthly_salary);
         const salarioDiario = salarioMensual / 30;
 
         const valorHoraExtra = (salarioDiario / 8) * 1.25;
-        const dineroHE = N(row.hours_extra) * valorHoraExtra;
+        const dineroHE = toNum(row.hours_extra) * valorHoraExtra;
 
-        const neto = salarioDiario + dineroHE + N(row.septimo_dia);
+        const sept = toNum(row.septimo_dia);
+
+        const neto = salarioDiario + dineroHE + sept;
 
         alDia.push({
           ...row,
-          salario_diario: Number(salarioDiario.toFixed(2)),
-          horas_extra_dinero: Number(dineroHE.toFixed(2)),
+          salario_diario: salarioDiario,
+          horas_extra_dinero: dineroHE,
           dias_trabajados: 1,
-          neto_pagar: Number(neto.toFixed(2))
+          neto_pagar: neto
         });
       }
     });
@@ -112,13 +130,13 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       total_payroll: [
         ...production,
         ...alDia
-      ].reduce((sum, r) => sum + r.neto_pagar, 0),
+      ].reduce((sum, r) => sum + toNum(r.neto_pagar), 0),
 
       total_production_employees: production.length,
-      total_production_payroll: production.reduce((sum, r) => sum + r.neto_pagar, 0),
+      total_production_payroll: production.reduce((sum, r) => sum + toNum(r.neto_pagar), 0),
 
       total_aldia_employees: alDia.length,
-      total_aldia_payroll: alDia.reduce((sum, r) => sum + r.neto_pagar, 0)
+      total_aldia_payroll: alDia.reduce((sum, r) => sum + toNum(r.neto_pagar), 0)
     };
 
     res.json({
@@ -135,6 +153,7 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 
 
 /* ============================================================
