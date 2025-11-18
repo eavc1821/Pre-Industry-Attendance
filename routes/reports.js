@@ -200,11 +200,21 @@ router.get('/monthly', authenticateToken, async (req, res) => {
     const yearNum = Number(year);
     const monthNum = Number(month);
 
-    // Rango mensual completo
-    const start = `${yearNum}-${monthNum.toString().padStart(2, '0')}-01`;
-    const end = `${yearNum}-${monthNum.toString().padStart(2, '0')}-31`;
+    if (monthNum < 1 || monthNum > 12) {
+      return res.status(400).json({ success: false, error: "Mes inválido" });
+    }
 
-    // Obtener asistencia del mes
+    /* ==========================================================
+       CALCULAR RANGO REAL DEL MES  (FIX DEL ERROR 31)
+    ========================================================== */
+    const lastDay = new Date(yearNum, monthNum, 0).getDate();
+
+    const start = `${yearNum}-${monthNum.toString().padStart(2, '0')}-01`;
+    const end   = `${yearNum}-${monthNum.toString().padStart(2, '0')}-${lastDay}`;
+
+    /* ==========================================================
+       CONSULTA DE ASISTENCIA MENSUAL
+    ========================================================== */
     const rows = await allQuery(
       `
       SELECT 
@@ -234,7 +244,9 @@ router.get('/monthly', authenticateToken, async (req, res) => {
 
     const employees = {};
 
-    /* ========== ACUMULAR DATOS MENSUALES ========== */
+    /* ==========================================================
+       ACUMULAR ESTADÍSTICAS DE LOS EMPLEADOS
+    ========================================================== */
     for (const row of rows) {
       const id = row.employee_id;
 
@@ -255,22 +267,26 @@ router.get('/monthly', authenticateToken, async (req, res) => {
         };
       }
 
+      employees[id].days_worked++;
+
       if (row.employee_type === "Producción") {
         employees[id].total_despalillo += Number(row.despalillo);
         employees[id].total_escogida += Number(row.escogida);
         employees[id].total_monado += Number(row.monado);
-        employees[id].days_worked++;
+
       } else {
         employees[id].hours_extra += Number(row.hours_extra);
-        employees[id].days_worked++;
       }
     }
 
     const productionEmployees = [];
     const alDiaEmployees = [];
 
-    /* ========== CALCULAR SALARIOS Y TOTALES ========== */
+    /* ==========================================================
+       CALCULAR PAGOS
+    ========================================================== */
     for (const emp of Object.values(employees)) {
+
       if (emp.employee_type === "Producción") {
 
         const TDes = emp.total_despalillo * 80;
@@ -305,7 +321,7 @@ router.get('/monthly', authenticateToken, async (req, res) => {
         // AL DÍA
         const dailySalary = emp.monthly_salary / 30;
         const hourValue = dailySalary / 8;
-        const overtimeValue = hourValue + hourValue * 0.25;
+        const overtimeValue = hourValue * 1.25;
 
         const overtimeMoney = Number((emp.hours_extra * overtimeValue).toFixed(2));
 
@@ -333,7 +349,9 @@ router.get('/monthly', authenticateToken, async (req, res) => {
       }
     }
 
-    // RESUMEN MENSUAL
+    /* ==========================================================
+       RESUMEN FINAL
+    ========================================================== */
     const summary = {
       total_employees: productionEmployees.length + alDiaEmployees.length,
       total_production_employees: productionEmployees.length,
@@ -359,6 +377,7 @@ router.get('/monthly', authenticateToken, async (req, res) => {
     res.status(500).json({ success: false, error: "Error generando reporte mensual" });
   }
 });
+
 
 
 /* ============================================================
