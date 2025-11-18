@@ -10,7 +10,6 @@ async function authenticateToken(req, res, next) {
   try {
     const header = req.headers.authorization;
 
-    // ⛔ No enviar mensaje genérico → AuthContext necesita “jwt malformed”
     if (!header) {
       return res.status(401).json({
         success: false,
@@ -33,46 +32,37 @@ async function authenticateToken(req, res, next) {
     } catch (err) {
       console.error('JWT verify error:', err.message);
 
-      if (err.name === 'TokenExpiredError') {
-        return res.status(401).json({
-          success: false,
-          error: 'jwt expired'
-        });
-      }
+      return res.status(401).json({
+        success: false,
+        error: err.name === 'TokenExpiredError' ? 'jwt expired' : 'jwt malformed'
+      });
+    }
 
+    // ⛔ getQuery devuelve 1 registro, no array
+    const user = await getQuery(
+      'SELECT id, username, role, is_active FROM users WHERE id = $1',
+      [decoded.id]
+    );
+
+    if (!user) {
       return res.status(401).json({
         success: false,
         error: 'jwt malformed'
       });
     }
 
-    const users = await getQuery(
-        'SELECT id, username, role, is_active FROM users WHERE id = $1',
-        [decoded.id]
-      );
+    if (user.is_active !== true) {
+      return res.status(403).json({
+        success: false,
+        error: 'Usuario inactivo'
+      });
+    }
 
-      if (!users || users.length === 0) {
-        return res.status(401).json({
-          success: false,
-          error: 'jwt malformed'
-        });
-      }
-
-      const user = users[0];
-
-      if (!user.is_active) {
-        return res.status(403).json({
-          success: false,
-          error: 'Usuario inactivo'
-        });
-      }
-
-      req.user = {
-        id: user.id,
-        username: user.username,
-        role: user.role
-      };
-
+    req.user = {
+      id: user.id,
+      username: user.username,
+      role: user.role
+    };
 
     next();
 
@@ -84,6 +74,7 @@ async function authenticateToken(req, res, next) {
     });
   }
 }
+
 
 // ============================================================
 //  SUPER ADMIN
