@@ -22,10 +22,9 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       });
     }
 
-    // Función para convertir seguro
     const toNum = (v) => parseFloat(v) || 0;
 
-    // Traer datos de asistencia + empleado
+    // Obtener registros
     const rows = await allQuery(
       `
       SELECT 
@@ -45,11 +44,10 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       JOIN employees e ON e.id = a.employee_id
       WHERE a.date BETWEEN $1 AND $2
       ORDER BY e.name ASC, a.date ASC
-    `,
+      `,
       [start, end]
     );
 
-    // Si no hay registros
     if (!rows || rows.length === 0) {
       return res.json({
         success: true,
@@ -66,17 +64,16 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
       });
     }
 
-    // Listas separadas
     const production = [];
     const alDia = [];
 
-    // Clasificar
+    // Clasificar registros según tipo
     rows.forEach(row => {
       const empType = (row.employee_type || "").trim().toLowerCase();
 
-      /* ============================================================
-         🟦 EMPLEADOS DE PRODUCCIÓN
-      ============================================================ */
+      /* =======================
+         PRODUCCIÓN
+      ========================== */
       if (empType === "producción" || empType === "produccion") {
 
         const tDesp = toNum(row.t_despalillo);
@@ -100,10 +97,10 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
         });
 
       } else {
-        /* ============================================================
-           🟩 EMPLEADOS AL DÍA (TU CASO ACTUAL)
-        ============================================================ */
 
+        /* =======================
+           AL DÍA
+        ========================== */
         const salarioMensual = toNum(row.monthly_salary);
         const salarioDiario = salarioMensual / 30;
 
@@ -111,7 +108,6 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
         const dineroHE = toNum(row.hours_extra) * valorHoraExtra;
 
         const sept = toNum(row.septimo_dia);
-
         const neto = salarioDiario + dineroHE + sept;
 
         alDia.push({
@@ -119,31 +115,95 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
           salario_diario: salarioDiario,
           horas_extra_dinero: dineroHE,
           dias_trabajados: 1,
+          septimo_dia: sept,
           neto_pagar: neto
         });
       }
     });
 
-    // Resumen global
+    /* ============================================================
+       AGRUPAR PRODUCCIÓN POR EMPLEADO
+    ============================================================ */
+    const prodMap = {};
+
+    production.forEach(p => {
+      if (!prodMap[p.employee_id]) {
+        prodMap[p.employee_id] = { ...p };
+      } else {
+        prodMap[p.employee_id].total_despalillo += p.total_despalillo;
+        prodMap[p.employee_id].total_escogida += p.total_escogida;
+        prodMap[p.employee_id].total_monado += p.total_monado;
+        prodMap[p.employee_id].total_produccion += p.total_produccion;
+        prodMap[p.employee_id].prop_sabado += p.prop_sabado;
+        prodMap[p.employee_id].septimo_dia += p.septimo_dia;
+        prodMap[p.employee_id].neto_pagar += p.neto_pagar;
+        prodMap[p.employee_id].dias_trabajados += 1;
+      }
+    });
+
+    const groupedProduction = Object.values(prodMap).map(emp => ({
+      ...emp,
+      total_despalillo: Number(emp.total_despalillo.toFixed(2)),
+      total_escogida: Number(emp.total_escogida.toFixed(2)),
+      total_monado: Number(emp.total_monado.toFixed(2)),
+      total_produccion: Number(emp.total_produccion.toFixed(2)),
+      prop_sabado: Number(emp.prop_sabado.toFixed(2)),
+      septimo_dia: Number(emp.septimo_dia.toFixed(2)),
+      neto_pagar: Number(emp.neto_pagar.toFixed(2))
+    }));
+
+
+    /* ============================================================
+       AGRUPAR AL DÍA POR EMPLEADO
+    ============================================================ */
+    const alDiaMap = {};
+
+    alDia.forEach(a => {
+      if (!alDiaMap[a.employee_id]) {
+        alDiaMap[a.employee_id] = { ...a };
+      } else {
+        alDiaMap[a.employee_id].horas_extra_dinero += a.horas_extra_dinero;
+        alDiaMap[a.employee_id].septimo_dia += a.septimo_dia;
+        alDiaMap[a.employee_id].neto_pagar += a.neto_pagar;
+        alDiaMap[a.employee_id].dias_trabajados += 1;
+      }
+    });
+
+    const groupedAlDia = Object.values(alDiaMap).map(emp => ({
+      ...emp,
+      salario_diario: Number(emp.salario_diario.toFixed(2)),
+      horas_extra_dinero: Number(emp.horas_extra_dinero.toFixed(2)),
+      septimo_dia: Number(emp.septimo_dia.toFixed(2)),
+      neto_pagar: Number(emp.neto_pagar.toFixed(2))
+    }));
+
+    
+    /* ===========================
+       RESUMEN FINAL
+    ============================ */
     const summary = {
-      total_employees: production.length + alDia.length,
-      total_payroll: [
-        ...production,
-        ...alDia
-      ].reduce((sum, r) => sum + toNum(r.neto_pagar), 0),
+      total_employees: groupedProduction.length + groupedAlDia.length,
+      total_payroll: [...groupedProduction, ...groupedAlDia]
+        .reduce((sum, e) => sum + e.neto_pagar, 0),
 
-      total_production_employees: production.length,
-      total_production_payroll: production.reduce((sum, r) => sum + toNum(r.neto_pagar), 0),
+      total_production_employees: groupedProduction.length,
+      total_production_payroll: groupedProduction
+        .reduce((s, e) => s + e.neto_pagar, 0),
 
-      total_aldia_employees: alDia.length,
-      total_aldia_payroll: alDia.reduce((sum, r) => sum + toNum(r.neto_pagar), 0)
+      total_aldia_employees: groupedAlDia.length,
+      total_aldia_payroll: groupedAlDia
+        .reduce((s, e) => s + e.neto_pagar, 0)
     };
 
+
+    /* ===========================
+       RESPUESTA FINAL
+    ============================ */
     res.json({
       success: true,
       data: {
-        production,
-        alDia,
+        production: groupedProduction,
+        alDia: groupedAlDia,
         summary
       }
     });
@@ -153,6 +213,7 @@ router.get("/weekly", authenticateToken, requireSuperAdmin, async (req, res) => 
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 
 
 
