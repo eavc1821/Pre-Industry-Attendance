@@ -54,7 +54,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 (async () => {
   try {
     console.log("🔄 Ejecutando migración (si es necesaria)...");
-    // await runMigration(); // solo crea tablas si no existen
+     await runMigration(); // solo crea tablas si no existen
     console.log("✅ Migración completada");
 
     // ===============================================================
