@@ -217,7 +217,7 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
     const month = new Date().getMonth() + 1;
 
     /* ======================================================
-       EMPLEADOS DE PRODUCCIÓN — CÁLCULO MENSUAL OFICIAL
+       EMPLEADOS DE PRODUCCIÓN
     ====================================================== */
     if (employee.type === "Producción") {
 
@@ -239,99 +239,96 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
 
       const daysWorked = Number(stats.days_worked) || 0;
 
-      // Cálculos de producción reales
-      const TDes = Number(stats.sum_despalillo) * 80;
-      const TEsc = Number(stats.sum_escogida) * 70;
-      const TMon = Number(stats.sum_monado) * 1;
+      const totalDes = Number(stats.sum_despalillo) * 80;
+      const totalEsc = Number(stats.sum_escogida) * 70;
+      const totalMon = Number(stats.sum_monado) * 1;
 
-      const totalProd = TDes + TEsc + TMon;
+      const totalProdMoney = totalDes + totalEsc + totalMon;
 
-      const saturdayBonus = Number((totalProd * 0.090909).toFixed(2));
-      const seventhDay = Number((totalProd * 0.181818).toFixed(2));
+      const saturdayBonus = Number((totalProdMoney * 0.090909).toFixed(2));
+      const seventhDay = Number((totalProdMoney * 0.181818).toFixed(2));
 
-      const netPay = Number((totalProd + saturdayBonus + seventhDay).toFixed(2));
+      const netPay = Number((totalProdMoney + saturdayBonus + seventhDay).toFixed(2));
 
       return res.json({
         success: true,
         data: {
-          type: "Producción",
-          days_worked: daysWorked,
+          type: "produccion",
 
-          // Cantidades
-          total_despalillo: Number(stats.sum_despalillo),
-          total_escogida: Number(stats.sum_escogida),
-          total_monado: Number(stats.sum_monado),
+          // Producción mensual
+          despalillo: Number(stats.sum_despalillo),
+          escogida: Number(stats.sum_escogida),
+          monado: Number(stats.sum_monado),
 
-          // Totales en dinero
-          production_total: Number(totalProd.toFixed(2)),
+          // Totales monetarios
+          total_despalillo: totalDes,
+          total_escogida: totalEsc,
+          total_monado: totalMon,
+
           saturday_bonus: saturdayBonus,
           seventh_day: seventhDay,
 
-          // Neto final
-          net_pay: netPay
+          dias_trabajados: daysWorked,
+          neto_pagar: netPay
         }
       });
     }
 
-/* ======================================================
-   EMPLEADOS AL DÍA — CÁLCULO MENSUAL OFICIAL CORREGIDO
-====================================================== */
+    /* ======================================================
+       EMPLEADOS AL DÍA
+    ====================================================== */
+    const stats = await getQuery(
+      `
+      SELECT 
+        COUNT(*) AS days_worked,
+        COALESCE(SUM(hours_extra), 0) AS hours_extra
+      FROM attendance
+      WHERE employee_id = $1
+      AND EXTRACT(YEAR FROM date) = $2
+      AND EXTRACT(MONTH FROM date) = $3
+      AND exit_time IS NOT NULL
+      `,
+      [employeeId, year, month]
+    );
 
-const stats = await getQuery(
-  `
-  SELECT 
-    COUNT(*) AS days_worked,
-    COALESCE(SUM(hours_extra), 0) AS hours_extra
-  FROM attendance
-  WHERE employee_id = $1
-  AND EXTRACT(YEAR FROM date) = $2
-  AND EXTRACT(MONTH FROM date) = $3
-  AND exit_time IS NOT NULL
-  `,
-  [employeeId, year, month]
-);
+    const daysWorked = Number(stats.days_worked) || 0;
+    const hoursExtra = Number(stats.hours_extra) || 0;
 
-const daysWorked = Number(stats.days_worked) || 0;
-const hoursExtra = Number(stats.hours_extra) || 0;
+    const monthlySalary = Number(employee.monthly_salary);
+    const dailySalary = monthlySalary / 30;
 
-const monthlySalary = Number(employee.monthly_salary);
-const dailySalary = monthlySalary / 30;
+    const hourValue = dailySalary / 8;
+    const overtimeValue = hourValue * 1.25;
+    const overtimeMoney = Number((overtimeValue * hoursExtra).toFixed(2));
 
-// Valor hora
-const hourValue = dailySalary / 8;
-const overtimeValue = hourValue + hourValue * 0.25;
+    const seventhDay = daysWorked >= 5 ? Number(dailySalary.toFixed(2)) : 0;
 
-// Horas extra en dinero
-const overtimeMoney = Number((overtimeValue * hoursExtra).toFixed(2));
+    const netPay = Number(
+      (dailySalary * daysWorked + overtimeMoney + seventhDay).toFixed(2)
+    );
 
-// 7mo día (solo si trabaja 5 o más días)
-const seventhDay = daysWorked >= 5 ? dailySalary : 0;
+    return res.json({
+      success: true,
+      data: {
+        type: "al dia",
 
-// NETO OFICIAL CORREGIDO
-const netPay = Number(
-  (dailySalary * daysWorked + overtimeMoney + seventhDay).toFixed(2)
-);
+        dias_trabajados: daysWorked,
 
-return res.json({
-  success: true,
-  data: {
-    type: "Al Día",
-    days_worked: daysWorked,
+        daily_salary: Number(dailySalary.toFixed(2)),
+        hours_extra: hoursExtra,
+        he_dinero: overtimeMoney,
+        seventh_day: seventhDay,
 
-    daily_salary: Number(dailySalary.toFixed(2)),
-    hours_extra: hoursExtra,
-    hours_extra_money: overtimeMoney,
-    seventh_day: Number(seventhDay.toFixed(2)),
-    net_pay: netPay
-  }
-});
-
+        neto_pagar: netPay
+      }
+    });
 
   } catch (error) {
     console.error("❌ Error obteniendo stats:", error);
     res.status(500).json({ success: false, error: "Error obteniendo estadísticas" });
   }
 });
+
 
 
 
