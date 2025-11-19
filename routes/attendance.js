@@ -136,18 +136,15 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
     const {
       employee_id,
       hours_extra = 0,
-      t_despalillo = 0,
-      t_escogida = 0,
-      t_monado = 0
+      despalillo = 0,   // 🔥 producción diaria
+      escogida = 0,     // 🔥 producción diaria
+      monado = 0        // 🔥 producción diaria
     } = req.body;
 
     const today = getLocalDate();
 
     if (!employee_id) {
-      return res.status(400).json({
-        success: false,
-        error: 'ID de empleado es requerido'
-      });
+      return res.status(400).json({ success: false, error: 'ID de empleado es requerido' });
     }
 
     const employee = await getQuery(
@@ -160,20 +157,16 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
     }
 
     if (!employee.is_active) {
-      return res.status(400).json({
-        success: false,
-        error: 'Empleado está inactivo'
-      });
+      return res.status(400).json({ success: false, error: 'Empleado está inactivo' });
     }
 
-    // Normalizar tipo para evitar errores de tilde
     const typeNorm = (employee.type || '').trim().toLowerCase();
 
     const attendanceRecord = await getQuery(
       `SELECT *
        FROM attendance
-       WHERE employee_id = $1
-         AND date = $2
+       WHERE employee_id = $1 
+         AND date = $2 
          AND exit_time IS NULL`,
       [employee_id, today]
     );
@@ -185,27 +178,28 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
       });
     }
 
-    const exitTime = getLocalTimeOnly(); // HH:MM:SS
+    const exitTime = getLocalTimeOnly(); // HH:mm:ss
 
-    // Conversión numérica
+    // Valores numéricos
     const he = parseFloat(hours_extra) || 0;
-    const des = parseFloat(t_despalillo) || 0;
-    const esc = parseFloat(t_escogida) || 0;
-    const mon = parseFloat(t_monado) || 0;
+    const d  = parseFloat(despalillo)  || 0;
+    const e  = parseFloat(escogida)    || 0;
+    const m  = parseFloat(monado)      || 0;
 
-    // Mapeo correcto según tipo
-    const finalHoursExtra = typeNorm === 'al dia' || typeNorm === 'al día' ? he : 0;
-    const finalDes = typeNorm === 'produccion' || typeNorm === 'producción' ? des : 0;
-    const finalEsc = typeNorm === 'produccion' || typeNorm === 'producción' ? esc : 0;
-    const finalMon = typeNorm === 'produccion' || typeNorm === 'producción' ? mon : 0;
+    // Mapeo según tipo
+    const finalHoursExtra = (typeNorm === 'al dia' || typeNorm === 'al día') ? he : 0;
+    const finalDes = (typeNorm === 'produccion' || typeNorm === 'producción') ? d : 0;
+    const finalEsc = (typeNorm === 'produccion' || typeNorm === 'producción') ? e : 0;
+    const finalMon = (typeNorm === 'produccion' || typeNorm === 'producción') ? m : 0;
 
+    // ✔ ACTUALIZACIÓN CORRECTA EN TU TABLA REAL
     await runQuery(
       `UPDATE attendance
-       SET exit_time = $1,
+       SET exit_time  = $1,
            hours_extra = $2,
-           t_despalillo = $3,
-           t_escogida = $4,
-           t_monado = $5
+           despalillo  = $3,
+           escogida    = $4,
+           monado      = $5
        WHERE id = $6`,
       [
         exitTime,
@@ -227,9 +221,9 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
         entry_time: attendanceRecord.entry_time,
         exit_time: exitTime,
         hours_extra: finalHoursExtra,
-        t_despalillo: finalDes,
-        t_escogida: finalEsc,
-        t_monado: finalMon,
+        despalillo: finalDes,
+        escogida: finalEsc,
+        monado: finalMon,
         status: 'completed'
       }
     });
@@ -242,6 +236,7 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
     });
   }
 });
+
 
 
 
@@ -261,9 +256,17 @@ router.get('/today', authenticateToken, async (req, res) => {
         a.exit_time,
         a.date,
         a.hours_extra,
+
+        -- Producción diaria
+        a.despalillo,
+        a.escogida,
+        a.monado,
+
+        -- Totales monetarios
         a.t_despalillo,
         a.t_escogida,
         a.t_monado,
+
         a.septimo_dia,
         a.prop_sabado,
 
@@ -281,7 +284,6 @@ router.get('/today', authenticateToken, async (req, res) => {
     );
 
     const processed = (records || []).map(r => {
-      
       const typeNorm = (r.employee_type || "").trim().toLowerCase();
 
       return {
@@ -292,7 +294,7 @@ router.get('/today', authenticateToken, async (req, res) => {
         employee_type: typeNorm,
         photo: r.photo,
 
-        // Times formatted HH:mm
+        // Horas
         entry_time: r.entry_time,
         exit_time: r.exit_time,
         entry_time_display: r.entry_time ? r.entry_time.substring(0,5) : '-',
@@ -304,13 +306,20 @@ router.get('/today', authenticateToken, async (req, res) => {
         status: r.exit_time === null ? "active" : "completed",
         status_text: r.exit_time === null ? "En Trabajo" : "Completado",
 
-        // Raw attendance values
+        // Raw values
         hours_extra: Number(r.hours_extra) || 0,
 
-        // Production fields
+        // Producción diaria
+        despalillo: Number(r.despalillo) || 0,
+        escogida: Number(r.escogida) || 0,
+        monado: Number(r.monado) || 0,
+
+        // Totales monetarios
         total_despalillo: Number(r.t_despalillo) || 0,
         total_escogida: Number(r.t_escogida) || 0,
         total_monado: Number(r.t_monado) || 0,
+
+        // Bonos
         saturday_bonus: Number(r.prop_sabado) || 0,
         seventh_day: Number(r.septimo_dia) || 0
       };
@@ -330,6 +339,7 @@ router.get('/today', authenticateToken, async (req, res) => {
     });
   }
 });
+
 
 
 module.exports = router;
