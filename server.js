@@ -8,6 +8,8 @@ const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
 
+
+
 // Importar migración y rutas
 // const runMigration = require('./db/migrate');
 const authRoutes = require('./routes/auth');
@@ -17,6 +19,8 @@ const attendanceRoutes = require('./routes/attendance');
 const reportRoutes = require('./routes/reports');
 const dashboardRoutes = require('./routes/dashboard');
 const devRoutes = require('./routes/dev');
+const runMigration = require('./db/migrate');
+
 
 const app = express();
 const PORT = process.env.PORT || 5000;
