@@ -297,36 +297,5 @@ router.get('/today', authenticateToken, async (req, res) => {
 });
 
 
-// =======================================
-// 🔧 MIGRACIÓN TEMPORAL DE ATTENDANCE
-// =======================================
-router.post('/migrate/attendance', async (req, res) => {
-  try {
-    await runQuery(`ALTER TABLE attendance DROP COLUMN IF EXISTS t_despalillo;`);
-    await runQuery(`ALTER TABLE attendance DROP COLUMN IF EXISTS t_escogida;`);
-    await runQuery(`ALTER TABLE attendance DROP COLUMN IF EXISTS t_monado;`);
-    await runQuery(`ALTER TABLE attendance DROP COLUMN IF EXISTS prop_sabado;`);
-    await runQuery(`ALTER TABLE attendance DROP COLUMN IF EXISTS septimo_dia;`);
-
-    res.json({
-      success: true,
-      message: "Migración aplicada correctamente."
-    });
-
-  } catch (err) {
-    res.status(500).json({
-      success: false,
-      error: err.message
-    });
-  }
-});
-
-
-
-router.get('/test-endpoint', (req, res) => {
-  res.json({ ok: true, message: "Attendance router is ACTIVE" });
-});
-
-
 
 module.exports = router;
