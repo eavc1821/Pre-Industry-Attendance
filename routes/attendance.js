@@ -133,11 +133,21 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
 ================================================================ */
 router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) => {
   try {
-    const { employee_id, hours_extra = 0, despalillo = 0, escogida = 0, monado = 0 } = req.body;
+    const {
+      employee_id,
+      hours_extra = 0,
+      t_despalillo = 0,
+      t_escogida = 0,
+      t_monado = 0
+    } = req.body;
+
     const today = getLocalDate();
 
     if (!employee_id) {
-      return res.status(400).json({ success: false, error: 'ID de empleado es requerido' });
+      return res.status(400).json({
+        success: false,
+        error: 'ID de empleado es requerido'
+      });
     }
 
     const employee = await getQuery(
@@ -150,15 +160,20 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
     }
 
     if (!employee.is_active) {
-      return res.status(400).json({ success: false, error: 'Empleado está inactivo' });
+      return res.status(400).json({
+        success: false,
+        error: 'Empleado está inactivo'
+      });
     }
 
-    // Buscar entrada activa
+    // Normalizar tipo para evitar errores de tilde
+    const typeNorm = (employee.type || '').trim().toLowerCase();
+
     const attendanceRecord = await getQuery(
-      `SELECT * 
-       FROM attendance 
-       WHERE employee_id = $1 
-         AND date = $2 
+      `SELECT *
+       FROM attendance
+       WHERE employee_id = $1
+         AND date = $2
          AND exit_time IS NULL`,
       [employee_id, today]
     );
@@ -172,26 +187,32 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
 
     const exitTime = getLocalTimeOnly(); // HH:MM:SS
 
-    // Valores puros a almacenar
-    const hoursExtraNum = parseFloat(hours_extra) || 0;
-    const desNum = parseFloat(despalillo) || 0;
-    const escNum = parseFloat(escogida) || 0;
-    const monNum = parseFloat(monado) || 0;
+    // Conversión numérica
+    const he = parseFloat(hours_extra) || 0;
+    const des = parseFloat(t_despalillo) || 0;
+    const esc = parseFloat(t_escogida) || 0;
+    const mon = parseFloat(t_monado) || 0;
+
+    // Mapeo correcto según tipo
+    const finalHoursExtra = typeNorm === 'al dia' || typeNorm === 'al día' ? he : 0;
+    const finalDes = typeNorm === 'produccion' || typeNorm === 'producción' ? des : 0;
+    const finalEsc = typeNorm === 'produccion' || typeNorm === 'producción' ? esc : 0;
+    const finalMon = typeNorm === 'produccion' || typeNorm === 'producción' ? mon : 0;
 
     await runQuery(
-      `UPDATE attendance 
+      `UPDATE attendance
        SET exit_time = $1,
            hours_extra = $2,
-           despalillo = $3,
-           escogida = $4,
-           monado = $5
+           t_despalillo = $3,
+           t_escogida = $4,
+           t_monado = $5
        WHERE id = $6`,
       [
         exitTime,
-        employee.type === 'Al Día' ? hoursExtraNum : 0,
-        employee.type === 'Producción' ? desNum : 0,
-        employee.type === 'Producción' ? escNum : 0,
-        employee.type === 'Producción' ? monNum : 0,
+        finalHoursExtra,
+        finalDes,
+        finalEsc,
+        finalMon,
         attendanceRecord.id
       ]
     );
@@ -203,16 +224,12 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
         employee_id,
         employee_name: employee.name,
         employee_type: employee.type.toLowerCase(),
-        date: today,
         entry_time: attendanceRecord.entry_time,
         exit_time: exitTime,
-
-        // Datos puros diarios
-        hours_extra: hoursExtraNum,
-        despalillo: desNum,
-        escogida: escNum,
-        monado: monNum,
-
+        hours_extra: finalHoursExtra,
+        t_despalillo: finalDes,
+        t_escogida: finalEsc,
+        t_monado: finalMon,
         status: 'completed'
       }
     });
@@ -225,6 +242,7 @@ router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) 
     });
   }
 });
+
 
 
 /* ================================================================
