@@ -241,6 +241,7 @@ router.get('/today', authenticateToken, async (req, res) => {
         a.employee_id,
         a.entry_time,
         a.exit_time,
+        a.date,
         a.hours_extra,
         a.t_despalillo,
         a.t_escogida,
@@ -278,6 +279,7 @@ router.get('/today', authenticateToken, async (req, res) => {
         exit_time: r.exit_time,
         entry_time_display: r.entry_time ? r.entry_time.substring(0,5) : '-',
         exit_time_display: r.exit_time ? r.exit_time.substring(0,5) : '-',
+        date: r.date,
 
         // Work state
         is_working: r.exit_time === null,
