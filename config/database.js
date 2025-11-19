@@ -10,6 +10,9 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
+console.log(">>> USING DATABASE_URL:", process.env.DATABASE_URL);
+
+
 // Conexión a PostgreSQL
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
