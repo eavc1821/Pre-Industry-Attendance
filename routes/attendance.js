@@ -133,109 +133,65 @@ router.post('/entry', authenticateToken, requireAdminOrScanner, async (req, res)
 ================================================================ */
 router.post('/exit', authenticateToken, requireAdminOrScanner, async (req, res) => {
   try {
-    const {
-      employee_id,
-      hours_extra = 0,
-      despalillo = 0,   // 🔥 producción diaria
-      escogida = 0,     // 🔥 producción diaria
-      monado = 0        // 🔥 producción diaria
-    } = req.body;
-
+    const { employee_id, hours_extra = 0, despalillo = 0, escogida = 0, monado = 0 } = req.body;
     const today = getLocalDate();
 
     if (!employee_id) {
-      return res.status(400).json({ success: false, error: 'ID de empleado es requerido' });
+      return res.status(400).json({ success: false, error: "ID de empleado requerido" });
     }
 
     const employee = await getQuery(
-      'SELECT id, name, type, is_active FROM employees WHERE id = $1',
+      "SELECT id, type, is_active FROM employees WHERE id = $1",
       [employee_id]
     );
 
-    if (!employee) {
-      return res.status(404).json({ success: false, error: 'Empleado no encontrado' });
+    if (!employee || !employee.is_active) {
+      return res.status(400).json({ success: false, error: "Empleado inválido o inactivo" });
     }
 
-    if (!employee.is_active) {
-      return res.status(400).json({ success: false, error: 'Empleado está inactivo' });
-    }
-
-    const typeNorm = (employee.type || '').trim().toLowerCase();
-
-    const attendanceRecord = await getQuery(
-      `SELECT *
-       FROM attendance
-       WHERE employee_id = $1 
-         AND date = $2 
-         AND exit_time IS NULL`,
+    const record = await getQuery(
+      "SELECT * FROM attendance WHERE employee_id = $1 AND date = $2 AND exit_time IS NULL",
       [employee_id, today]
     );
 
-    if (!attendanceRecord) {
-      return res.status(400).json({
-        success: false,
-        error: 'No existe entrada pendiente para hoy.'
-      });
+    if (!record) {
+      return res.status(400).json({ success: false, error: "No existe entrada pendiente para hoy" });
     }
 
-    const exitTime = getLocalTimeOnly(); // HH:mm:ss
+    const exitTime = getLocalTimeOnly();
 
-    // Valores numéricos
-    const he = parseFloat(hours_extra) || 0;
-    const d  = parseFloat(despalillo)  || 0;
-    const e  = parseFloat(escogida)    || 0;
-    const m  = parseFloat(monado)      || 0;
-
-    // Mapeo según tipo
-    const finalHoursExtra = (typeNorm === 'al dia' || typeNorm === 'al día') ? he : 0;
-    const finalDes = (typeNorm === 'produccion' || typeNorm === 'producción') ? d : 0;
-    const finalEsc = (typeNorm === 'produccion' || typeNorm === 'producción') ? e : 0;
-    const finalMon = (typeNorm === 'produccion' || typeNorm === 'producción') ? m : 0;
-
-    // ✔ ACTUALIZACIÓN CORRECTA EN TU TABLA REAL
     await runQuery(
-      `UPDATE attendance
-       SET exit_time  = $1,
-           hours_extra = $2,
-           despalillo  = $3,
-           escogida    = $4,
-           monado      = $5
-       WHERE id = $6`,
+      `
+      UPDATE attendance
+      SET exit_time = $1,
+          hours_extra = $2,
+          despalillo = $3,
+          escogida = $4,
+          monado = $5
+      WHERE id = $6
+      `,
       [
         exitTime,
-        finalHoursExtra,
-        finalDes,
-        finalEsc,
-        finalMon,
-        attendanceRecord.id
+        employee.type === "Al Día" ? Number(hours_extra) : 0,
+        employee.type === "Producción" ? Number(despalillo) : 0,
+        employee.type === "Producción" ? Number(escogida) : 0,
+        employee.type === "Producción" ? Number(monado) : 0,
+        record.id
       ]
     );
 
     res.json({
       success: true,
-      message: `Salida registrada para ${employee.name}`,
-      data: {
-        employee_id,
-        employee_name: employee.name,
-        employee_type: employee.type.toLowerCase(),
-        entry_time: attendanceRecord.entry_time,
-        exit_time: exitTime,
-        hours_extra: finalHoursExtra,
-        despalillo: finalDes,
-        escogida: finalEsc,
-        monado: finalMon,
-        status: 'completed'
-      }
+      message: "Salida registrada",
+      exit_time: exitTime
     });
 
   } catch (error) {
-    console.error('🚨 Error en salida:', error);
-    res.status(500).json({
-      success: false,
-      error: `Error al registrar salida: ${error.message}`
-    });
+    console.error("❌ Error al registrar salida:", error);
+    res.status(500).json({ success: false, error: error.message });
   }
 });
+
 
 
 
@@ -337,6 +293,23 @@ router.get('/today', authenticateToken, async (req, res) => {
       success: false,
       error: 'Error al obtener registros de hoy'
     });
+  }
+});
+
+
+router.post('/migrate/attendance', async (req, res) => {
+  try {
+    // 1. Eliminar columnas derivadas
+    await runQuery(`ALTER TABLE attendance DROP COLUMN IF EXISTS t_despalillo;`);
+    await runQuery(`ALTER TABLE attendance DROP COLUMN IF EXISTS t_escogida;`);
+    await runQuery(`ALTER TABLE attendance DROP COLUMN IF EXISTS t_monado;`);
+    await runQuery(`ALTER TABLE attendance DROP COLUMN IF EXISTS prop_sabado;`);
+    await runQuery(`ALTER TABLE attendance DROP COLUMN IF EXISTS septimo_dia;`);
+
+    res.json({ success: true, message: "Migración aplicada correctamente." });
+
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

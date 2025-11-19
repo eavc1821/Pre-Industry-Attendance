@@ -198,36 +198,25 @@ router.delete("/:id", authenticateToken, requireAdminOrScanner, async (req, res)
 /* ==================================================
    STATS POR EMPLEADO
 ================================================== */
-router.get('/:id/stats', authenticateToken, async (req, res) => {
+router.get('/:id/stats', async (req, res) => {
   try {
     const employeeId = req.params.id;
-
-    const employee = await getQuery(
-      `SELECT id, name, type, monthly_salary
-       FROM employees 
-       WHERE id = $1 AND is_active = TRUE`,
+    const { type, monthly_salary } = await getQuery(
+      "SELECT type, monthly_salary FROM employees WHERE id = $1 AND is_active = TRUE",
       [employeeId]
     );
-
-    if (!employee) {
-      return res.status(404).json({ success: false, error: "Empleado no encontrado" });
-    }
 
     const year = new Date().getFullYear();
     const month = new Date().getMonth() + 1;
 
-    /* ======================================================
-       EMPLEADOS DE PRODUCCIÓN
-    ====================================================== */
-    if (employee.type === "Producción") {
-
+    if (type === "Producción") {
       const stats = await getQuery(
         `
-        SELECT 
-          COUNT(*) AS days_worked,
-          COALESCE(SUM(despalillo), 0) AS sum_despalillo,
-          COALESCE(SUM(escogida), 0) AS sum_escogida,
-          COALESCE(SUM(monado), 0) AS sum_monado
+        SELECT
+          COUNT(*) days_worked,
+          SUM(despalillo) despalillo,
+          SUM(escogida) escogida,
+          SUM(monado) monado
         FROM attendance
         WHERE employee_id = $1
         AND EXTRACT(YEAR FROM date) = $2
@@ -237,51 +226,43 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
         [employeeId, year, month]
       );
 
-      const daysWorked = Number(stats.days_worked) || 0;
+      const total_despalillo = Number(stats.despalillo) * 80;
+      const total_escogida = Number(stats.escogida) * 70;
+      const total_monado = Number(stats.monado) * 1;
 
-      const totalDes = Number(stats.sum_despalillo) * 80;
-      const totalEsc = Number(stats.sum_escogida) * 70;
-      const totalMon = Number(stats.sum_monado) * 1;
+      const production_total = total_despalillo + total_escogida + total_monado;
 
-      const totalProdMoney = totalDes + totalEsc + totalMon;
-
-      const saturdayBonus = Number((totalProdMoney * 0.090909).toFixed(2));
-      const seventhDay = Number((totalProdMoney * 0.181818).toFixed(2));
-
-      const netPay = Number((totalProdMoney + saturdayBonus + seventhDay).toFixed(2));
+      const saturday_bonus = Number((production_total * 0.090909).toFixed(2));
+      const seventh_day = Number((production_total * 0.181818).toFixed(2));
+      const neto_pagar = Number((production_total + saturday_bonus + seventh_day).toFixed(2));
 
       return res.json({
         success: true,
         data: {
           type: "produccion",
+          dias_trabajados: Number(stats.days_worked),
 
-          // Producción mensual
-          despalillo: Number(stats.sum_despalillo),
-          escogida: Number(stats.sum_escogida),
-          monado: Number(stats.sum_monado),
+          despalillo: Number(stats.despalillo),
+          escogida: Number(stats.escogida),
+          monado: Number(stats.monado),
 
-          // Totales monetarios
-          total_despalillo: totalDes,
-          total_escogida: totalEsc,
-          total_monado: totalMon,
+          total_despalillo,
+          total_escogida,
+          total_monado,
 
-          saturday_bonus: saturdayBonus,
-          seventh_day: seventhDay,
-
-          dias_trabajados: daysWorked,
-          neto_pagar: netPay
+          saturday_bonus,
+          seventh_day,
+          neto_pagar
         }
       });
     }
 
-    /* ======================================================
-       EMPLEADOS AL DÍA
-    ====================================================== */
+    // AL DÍA
     const stats = await getQuery(
       `
       SELECT 
-        COUNT(*) AS days_worked,
-        COALESCE(SUM(hours_extra), 0) AS hours_extra
+        COUNT(*) days_worked,
+        SUM(hours_extra) hours_extra
       FROM attendance
       WHERE employee_id = $1
       AND EXTRACT(YEAR FROM date) = $2
@@ -291,43 +272,36 @@ router.get('/:id/stats', authenticateToken, async (req, res) => {
       [employeeId, year, month]
     );
 
-    const daysWorked = Number(stats.days_worked) || 0;
-    const hoursExtra = Number(stats.hours_extra) || 0;
+    const dias = Number(stats.days_worked);
+    const hours = Number(stats.hours_extra);
 
-    const monthlySalary = Number(employee.monthly_salary);
-    const dailySalary = monthlySalary / 30;
-
-    const hourValue = dailySalary / 8;
+    const daily = monthly_salary / 30;
+    const hourValue = daily / 8;
     const overtimeValue = hourValue * 1.25;
-    const overtimeMoney = Number((overtimeValue * hoursExtra).toFixed(2));
 
-    const seventhDay = daysWorked >= 5 ? Number(dailySalary.toFixed(2)) : 0;
-
-    const netPay = Number(
-      (dailySalary * daysWorked + overtimeMoney + seventhDay).toFixed(2)
-    );
+    const he_dinero = Number((overtimeValue * hours).toFixed(2));
+    const seventh_day = dias >= 5 ? Number(daily.toFixed(2)) : 0;
+    const neto_pagar = Number((dias * daily + he_dinero + seventh_day).toFixed(2));
 
     return res.json({
       success: true,
       data: {
         type: "al dia",
-
-        dias_trabajados: daysWorked,
-
-        daily_salary: Number(dailySalary.toFixed(2)),
-        hours_extra: hoursExtra,
-        he_dinero: overtimeMoney,
-        seventh_day: seventhDay,
-
-        neto_pagar: netPay
+        dias_trabajados: dias,
+        hours_extra: hours,
+        he_dinero,
+        daily_salary: daily,
+        seventh_day,
+        neto_pagar
       }
     });
 
-  } catch (error) {
-    console.error("❌ Error obteniendo stats:", error);
-    res.status(500).json({ success: false, error: "Error obteniendo estadísticas" });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, error: "Error obteniendo stats" });
   }
 });
+
 
 
 

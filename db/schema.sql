@@ -53,31 +53,34 @@ CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active);
 -- ===============================================================
 --   TABLE: attendance
 -- ===============================================================
-CREATE TABLE IF NOT EXISTS attendance (
+DROP TABLE IF EXISTS attendance;
+
+CREATE TABLE attendance (
     id BIGSERIAL PRIMARY KEY,
     employee_id BIGINT NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
     date DATE NOT NULL,
     entry_time TIMESTAMP,
     exit_time TIMESTAMP,
+
+    -- Al Día
     hours_extra NUMERIC(10,2) DEFAULT 0,
+
+    -- Producción
     despalillo NUMERIC(12,2) DEFAULT 0,
     escogida NUMERIC(12,2) DEFAULT 0,
     monado NUMERIC(12,2) DEFAULT 0,
-    t_despalillo NUMERIC(12,2) DEFAULT 0,
-    t_escogida NUMERIC(12,2) DEFAULT 0,
-    t_monado NUMERIC(12,2) DEFAULT 0,
-    prop_sabado NUMERIC(12,2) DEFAULT 0,
-    septimo_dia NUMERIC(12,2) DEFAULT 0,
+
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
 
-    -- Evitar doble entrada por día
     UNIQUE (employee_id, date)
 );
 
--- Optimización para filtros comunes
 CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date);
 CREATE INDEX IF NOT EXISTS idx_attendance_employee_date ON attendance(employee_id, date);
+
+
+
 
 
 -- ===============================================================
