@@ -2,7 +2,7 @@
 // SERVER.JS – Producción (Railway + PostgreSQL + Cloudinary)
 // ===============================================================
 
-require('dotenv').config();
+require('dotenv').config({ path: null });
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -58,7 +58,7 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 (async () => {
   try {
     console.log("🔄 Ejecutando migración (si es necesaria)...");
-    // await runMigration(); // solo crea tablas si no existen
+     await runMigration(); // solo crea tablas si no existen
     console.log("✅ Migración completada");
 
     // ===============================================================
