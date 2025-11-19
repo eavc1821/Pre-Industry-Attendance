@@ -314,5 +314,10 @@ router.post('/migrate/attendance', async (req, res) => {
 });
 
 
+router.get('/test-endpoint', (req, res) => {
+  res.json({ ok: true, message: "Attendance router is ACTIVE" });
+});
+
+
 
 module.exports = router;
