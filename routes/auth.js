@@ -15,6 +15,10 @@ router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
 
+    console.log(">>> LOGIN DEBUG:");
+    console.log("Username recibido:", username);
+    console.log("Password recibido:", password);
+
     if (!username || !password) {
       return res.status(400).json({
         success: false,
